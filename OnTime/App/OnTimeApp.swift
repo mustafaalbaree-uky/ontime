@@ -25,15 +25,33 @@ struct OnTimeApp: App {
             // here — see that file's comment for why.
             container = try Self.openStore(config: config)
             Self.deleteOrphanedRuns(in: container)
-            Task { @MainActor in
+            let launchContainer = container
+            MainActor.assumeIsolated {
+                // Synchronously, before launch finishes: the notification
+                // center delegate must exist before the launch sequence can
+                // deliver a notification response (a cold launch from a
+                // "Next Step" action otherwise drops the tap), and touching
+                // RunEngineStore here registers the Complete Step observer
+                // for the same reason. Only the authorization *request*
+                // stays async.
                 Notifications.shared.registerCategories()
+                RunEngineStore.shared.configure(modelContext: launchContainer.mainContext)
+                // Same context, same moment. The BG arm task can run with no
+                // view hierarchy ever appearing, and it is exactly the pass
+                // that turns an upcoming routine into a live run — the one
+                // change the Home Screen widget most needs to hear about.
+                WidgetBridge.shared.configure(modelContext: launchContainer.mainContext)
+            }
+            Task { @MainActor in
                 _ = await Notifications.shared.requestAuthorization()
             }
             // Kicks off the location permission prompt (or a one-shot fix
             // if already granted) at launch rather than waiting for the
             // user to open Settings — a drive block's "Current Location"
             // origin is otherwise silently (0, 0) until that happens.
-            LocationService.shared.requestLocation()
+            MainActor.assumeIsolated {
+                LocationService.shared.requestLocation()
+            }
             registerArmTask(container: container)
         } catch {
             fatalError("Could not open the store: \(error)")
@@ -65,14 +83,27 @@ struct OnTimeApp: App {
         do {
             return try ModelContainer(for: schema, configurations: config)
         } catch {
-            print("Store incompatible (\(error)) — rebuilding it.")
+            // One immediate retry first: `ModelContainer` can throw for
+            // transient reasons (a file lock, disk pressure) that have
+            // nothing to do with the schema, and rebuilding on those would
+            // trade recoverable data for nothing.
+            if let second = try? ModelContainer(for: schema, configurations: config) {
+                return second
+            }
+            print("Store failed to open twice (\(error)) — moving it aside and rebuilding.")
             if let url = config.url as URL? {
-                // Core Data keeps the WAL and shared-memory sidecars beside
-                // the store; leaving them behind makes the fresh store fail
-                // to open too.
+                // Moved aside with a timestamp, never deleted: if the
+                // failure turns out to have been transient after all, the
+                // bytes are still on disk to recover by hand. Core Data
+                // keeps the WAL and shared-memory sidecars beside the
+                // store; they travel with it or the fresh store fails to
+                // open too.
+                let stamp = Int(Date().timeIntervalSince1970)
                 for suffix in ["", "-wal", "-shm"] {
                     let sidecar = URL(fileURLWithPath: url.path + suffix)
-                    try? FileManager.default.removeItem(at: sidecar)
+                    guard FileManager.default.fileExists(atPath: sidecar.path) else { continue }
+                    let backup = URL(fileURLWithPath: url.path + suffix + ".incompatible-\(stamp)")
+                    try? FileManager.default.moveItem(at: sidecar, to: backup)
                 }
             }
             return try ModelContainer(for: schema, configurations: config)
@@ -86,12 +117,19 @@ struct OnTimeApp: App {
             using: nil
         ) { task in
             Task { @MainActor in
-                // A fresh context: this runs with no view hierarchy, so
-                // there is no environment `modelContext` to borrow.
-                let context = ModelContext(container)
-                ScheduleService.armDueRoutines(in: context)
-                ScheduleService.refreshArmAlarms(in: context)
-                try? context.save()
+                // The view hierarchy's own context, NOT a throwaway
+                // `ModelContext(container)`: a hand-made context has
+                // autosave off, so a run armed here lived in a context
+                // nothing ever saved again, and its engine's later writes
+                // crossed wires with the view context on the next
+                // foreground.
+                ScheduleService.catchUp(in: container.mainContext)
+                do {
+                    try container.mainContext.save()
+                } catch {
+                    print("BG arm task save failed: \(error)")
+                }
+                WidgetBridge.shared.refresh()
                 Self.scheduleArmTask()
                 task.setTaskCompleted(success: true)
             }
@@ -124,11 +162,15 @@ struct OnTimeApp: App {
     /// real without ever touching a property that would fault.
     private static func deleteOrphanedRuns(in container: ModelContainer) {
         let context = ModelContext(container)
-        let openRuns = (try? context.fetch(FetchDescriptor<Run>(predicate: #Predicate { $0.finishedAt == nil }))) ?? []
-        guard !openRuns.isEmpty else { return }
+        // Every run, not only open ones: a *finished* run with a dead plan
+        // pointer persists forever and becomes a guaranteed crash the
+        // moment anything (the planned run-history screen in particular)
+        // reads `run.plan` properties.
+        let allRuns = (try? context.fetch(FetchDescriptor<Run>())) ?? []
+        guard !allRuns.isEmpty else { return }
 
         let livePlanIDs = Set(((try? context.fetch(FetchDescriptor<Plan>())) ?? []).map(\.persistentModelID))
-        for run in openRuns {
+        for run in allRuns {
             let planIsLive = run.plan.map { livePlanIDs.contains($0.persistentModelID) } ?? false
             if !planIsLive {
                 context.delete(run)

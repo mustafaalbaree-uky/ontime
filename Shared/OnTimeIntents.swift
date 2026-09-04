@@ -23,8 +23,18 @@ public struct CompleteStepIntent: LiveActivityIntent {
 
     @MainActor
     public func perform() async throws -> some IntentResult {
+        // Persist the tap before posting it. A LiveActivityIntent can launch
+        // the app in the background, where the in-process observer
+        // (`RunEngineStore`) may not exist yet — the post then lands on
+        // nobody and the tap would be silently lost while this still
+        // reported success. The observer clears the record when it handles
+        // the live post; otherwise the next real launch consumes it.
+        UserDefaults.standard.set(
+            ["planId": planId, "at": Date().timeIntervalSince1970],
+            forKey: OnTimeShared.pendingAdvanceKey
+        )
         NotificationCenter.default.post(
-            name: NSNotification.Name("OnTimeAdvanceStepFromIntent"),
+            name: OnTimeShared.advanceStepNotification,
             object: nil,
             userInfo: ["planId": planId]
         )

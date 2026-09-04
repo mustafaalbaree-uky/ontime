@@ -155,6 +155,52 @@ struct SolverTests {
         #expect(try #require(solution.flexDuration) == TimeInterval(-10 * 60))
     }
 
+    // MARK: 7b. leaveBy values are asserted numerically, not just by case.
+    // A uniform shift of every leaveBy (a suffix indexing slip, say) is
+    // invariant under the late-start and overrun tests above, so at least
+    // one test has to pin the actual clock times. The flex block's own
+    // leaveBy is the number the walk feature hands to WalkTracker as the
+    // be-back-by time.
+
+    @Test func hardLeaveByValuesAreExactlyDeadlineMinusSuffix() throws {
+        let start = date(12, 0)
+        let deadline = start.addingTimeInterval(75 * 60)   // 13:15
+        let solution = try Solver.solve(catVetInput(start: start, deadline: deadline))
+
+        // Durations after each index: [flex..end]=65, [10,5,15]=30, [5,15]=20, [15]=15, []=0.
+        let expected: [Int: Date] = [
+            1: deadline.addingTimeInterval(-30 * 60),  // flex block ends 12:45
+            2: deadline.addingTimeInterval(-20 * 60),  // drive back ends 12:55
+            3: deadline.addingTimeInterval(-15 * 60),  // carrier ends 13:00
+            4: deadline,                               // vet drive ends 13:15
+        ]
+        for (index, expectedDate) in expected {
+            guard case .hardLeaveBy(let actual) = solution.blocks[index].constraint else {
+                Issue.record("expected .hardLeaveBy on block \(index)")
+                return
+            }
+            #expect(actual == expectedDate, "block \(index)")
+        }
+        // And the pre-flex block's scheduled span is pinned too.
+        #expect(solution.blocks[0].scheduledStart == start)
+        #expect(solution.blocks[0].scheduledEnd == start.addingTimeInterval(10 * 60))
+    }
+
+    // MARK: 7c. Fully determined input with slack reports negative lateness.
+
+    @Test func givenStartWithNoFlexReportsSlackAsNegativeLateness() throws {
+        let deadline = date(19, 30)
+        let input = SolverInput(
+            durations: [.known(TimeInterval(7 * 60)), .known(TimeInterval(12 * 60))],
+            deadline: deadline,
+            start: date(19, 0),   // finishes 19:19, 11 minutes of slack
+            pinnedFlex: nil
+        )
+        let solution = try Solver.solve(input)
+        #expect(solution.lateness == TimeInterval(-11 * 60))
+        #expect(solution.start == date(19, 0))
+    }
+
     // MARK: 8. Errors.
 
     @Test func multipleFlexBlocksThrows() {

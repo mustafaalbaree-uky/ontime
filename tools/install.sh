@@ -1,10 +1,7 @@
 #!/bin/bash
 #
-# Rebuilds and reinstalls OnTime to the connected iPhone, then resets the expiry
-# clock. Same shape as the ClipKeyboard reinstall script, because it is the
-# same free Apple ID and the same seven day provisioning limit.
-#
-# Phone must be plugged in and unlocked.
+# Rebuilds and reinstalls OnTime to the connected iPhone. Phone must be
+# plugged in and unlocked.
 #
 set -euo pipefail
 
@@ -20,11 +17,21 @@ xcodegen generate >/dev/null
 # different CoreDevice UUID that xcodebuild will reject. Ask xcodebuild itself
 # rather than hardcoding either one.
 echo "==> Looking for a connected iPhone"
-# `|| true` matters: with `set -e` and `pipefail`, a grep that matches nothing
-# returns 1 and would abort the script before it could explain why.
-DEVICE_ID=$( { xcodebuild -project OnTime.xcodeproj -scheme OnTime -showdestinations 2>/dev/null \
-  | grep "platform:iOS," | grep -v placeholder \
-  | sed -n 's/.*id:\([^,}]*\).*/\1/p' | head -1 | tr -d ' '; } || true )
+# PhoneDeck sets PHONEDECK_DEVICE_ID to the phone picked in its device menu,
+# as a hardware UDID. Honour it rather than deciding again here: with more
+# than one phone reachable, a fresh lookup can land on a different one from
+# the phone PhoneDeck is showing, and that other phone is often somebody
+# else's. Run by hand from a terminal with nothing set, the lookup below
+# runs as it always has.
+DEVICE_ID="${PHONEDECK_DEVICE_ID:-}"
+
+if [ -z "$DEVICE_ID" ]; then
+  # `|| true` matters: with `set -e` and `pipefail`, a grep that matches nothing
+  # returns 1 and would abort the script before it could explain why.
+  DEVICE_ID=$( { xcodebuild -project OnTime.xcodeproj -scheme OnTime -showdestinations 2>/dev/null \
+    | grep "platform:iOS," | grep -v placeholder \
+    | sed -n 's/.*id:\([^,}]*\).*/\1/p' | head -1 | tr -d ' '; } || true )
+fi
 
 if [ -z "$DEVICE_ID" ]; then
   echo
@@ -37,34 +44,7 @@ if [ -z "$DEVICE_ID" ]; then
   xcrun devicectl list devices 2>/dev/null | grep -i iphone || echo "  (none)"
   exit 1
 fi
-echo "    using $DEVICE_ID"
-
-# Xcode reuses an existing provisioning profile whenever it is still valid, so
-# a rebuild does NOT restart the seven day clock — the clock keeps running from
-# whenever the profile was first issued. That is what bit ClipKeyboard on
-# 11 Aug 2026: profiles issued 4 Aug were reused by the 8 Aug rebuild and died
-# on schedule three days later, while PhoneDeck still showed four days left
-# because it was counting from the install date. Deleting our own profiles
-# first forces -allowProvisioningUpdates to mint new ones, so "reinstalled
-# today" and "seven days left" actually mean the same thing.
-echo "==> Clearing old provisioning profiles"
-PROFILE_DIR="$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
-BUNDLE_ID="com.mammer55.ontime"
-if [ -d "$PROFILE_DIR" ]; then
-  for prof in "$PROFILE_DIR"/*.mobileprovision; do
-    [ -e "$prof" ] || continue
-    appid=$( { security cms -D -i "$prof" 2>/dev/null \
-      | plutil -extract Entitlements.application-identifier raw - 2>/dev/null; } || true )
-    # appid looks like TEAMID.com.example.app — match the app itself and
-    # anything nested under it (extensions), nothing else.
-    case "$appid" in
-      *".$BUNDLE_ID"|*".$BUNDLE_ID".*)
-        echo "    removing $(basename "$prof") ($appid)"
-        rm -f "$prof"
-        ;;
-    esac
-  done
-fi
+echo "    using ${PHONEDECK_DEVICE_NAME:+${PHONEDECK_DEVICE_NAME} }$DEVICE_ID"
 
 # Every install used to carry CFBundleVersion 1, so as far as iOS was concerned
 # the app never changed. SpringBoard keeps its cached icon in that case, which
@@ -80,10 +60,15 @@ echo "==> Installing"
 xcrun devicectl device install app --device "$DEVICE_ID" \
   build/Build/Products/Debug-iphoneos/OnTime.app
 
-echo "==> Resetting expiry clock"
+echo "==> Recording the install"
 mkdir -p "$STATE"
-date +%s > "$STATE/last_install"
+NOW=$(date +%s)
+echo "$NOW" > "$STATE/last_install"
+# Per phone as well, so PhoneDeck can say whether this build is on the phone
+# you are looking at rather than on whichever phone was here last. The plain
+# last_install stays, for anything still reading it.
+echo "$NOW" > "$STATE/last_install_$DEVICE_ID"
 
 echo
-echo "Done. OnTime reinstalled and the 7 day clock is reset."
+echo "Done. OnTime reinstalled."
 echo "Your data is untouched: reinstalling over the app keeps its container."

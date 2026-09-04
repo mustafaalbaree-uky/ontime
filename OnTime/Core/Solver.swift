@@ -13,13 +13,18 @@ enum BlockConstraint: Equatable {
     /// wall-clock deadline for finishing the block.
     case hardLeaveBy(Date)
     /// The flex block is still ahead, so lateness here does not move `E`;
-    /// it shrinks the flex block instead. Carries the flex time currently
-    /// remaining, which the UI shows counting down live.
+    /// it shrinks the flex block instead. Carries the flex duration as
+    /// solved from this input — a static value per solve, which only moves
+    /// between ticks because the caller re-solves with fresh inputs, not
+    /// because anything here tracks the wall clock.
     case flexAbsorbs(remainingFlex: TimeInterval)
 }
 
-/// The inputs to `Solver.solve`. Exactly one of `start` / the flex block's
-/// duration must be unknown — see `SolverError`.
+/// The inputs to `Solver.solve`. At most one thing may be unknown: either
+/// `start` (no flex block present) or the flex block's duration (flex block
+/// present, start given). A fully determined input — no flex block and a
+/// supplied start — is deliberately accepted, with any mismatch against the
+/// deadline reported via `Solution.lateness` rather than an error.
 struct SolverInput {
     var durations: [BlockDuration]
     var deadline: Date
@@ -56,7 +61,6 @@ struct Solution: Equatable {
 enum SolverError: Error, Equatable {
     case multipleFlexBlocks
     case underdetermined
-    case overdetermined
     case empty
 }
 
@@ -73,7 +77,10 @@ enum Solver {
             // start = deadline - sum(known durations).
             // If `start` was given, we accept it and validate against deadline via lateness.
             let resolved = input.durations.compactMap { d -> TimeInterval? in
-                if case .known(let v) = d { return v }
+                // A negative known duration is upstream nonsense that would
+                // silently invert the schedule (leaveBy before scheduledStart,
+                // notifications armed in the past); clamp it loudly.
+                if case .known(let v) = d { return Self.nonNegative(v) }
                 return nil
             }
             let sumKnown = resolved.reduce(0, +)
@@ -91,7 +98,7 @@ enum Solver {
             guard let start = input.start else { throw SolverError.underdetermined }
             var resolved = [TimeInterval](repeating: 0, count: input.durations.count)
             for (i, d) in input.durations.enumerated() {
-                if case .known(let v) = d { resolved[i] = v }
+                if case .known(let v) = d { resolved[i] = Self.nonNegative(v) }
             }
             resolved[fi] = pinned
             return buildSolution(input: input, start: start, flexIndex: fi,
@@ -105,14 +112,25 @@ enum Solver {
         var knownSum: TimeInterval = 0
         for (i, d) in input.durations.enumerated() {
             if case .known(let v) = d {
-                resolved[i] = v
-                knownSum += v
+                let clamped = Self.nonNegative(v)
+                resolved[i] = clamped
+                knownSum += clamped
             }
         }
         let flexValue = input.deadline.timeIntervalSince(start) - knownSum
         resolved[fi] = flexValue
         return buildSolution(input: input, start: start, flexIndex: fi,
                               flexDuration: flexValue, resolvedDurations: resolved)
+    }
+
+    /// Negative flex is legal (it *is* the lateness signal); a negative
+    /// known duration never is.
+    private static func nonNegative(_ v: TimeInterval) -> TimeInterval {
+        guard v >= 0 else {
+            assertionFailure("Negative known duration \(v) fed to Solver")
+            return 0
+        }
+        return v
     }
 
     private static func buildSolution(

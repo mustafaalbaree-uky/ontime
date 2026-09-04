@@ -1,13 +1,12 @@
 import SwiftUI
 import SwiftData
 
-/// Lists every currently-open `Run` — the equivalent of the Live Activities
-/// on the Lock Screen, but inside the app, and independent of whether a
-/// Live Activity actually started (Live Activities can be off in Settings).
-/// Tapping a row goes back into that run's live countdown, same screen
-/// `RunView` always was; the point of this tab is that closing that screen
-/// no longer stops the run, so there needed to be a way back to it besides
-/// digging through Plans.
+/// Every currently open `Run`: the equivalent of the Live Activities on the
+/// Lock Screen, but inside the app, and independent of whether a Live
+/// Activity actually started (they can be off in Settings). Tapping a row
+/// goes back into that run's countdown, the same `RunView` it always was;
+/// the point of this tab is that closing that screen no longer stops the run,
+/// so there had to be a way back to it.
 struct CountdownsView: View {
     @Query(filter: #Predicate<Run> { $0.finishedAt == nil }, sort: \Run.startedAt, order: .reverse)
     private var openRuns: [Run]
@@ -15,24 +14,31 @@ struct CountdownsView: View {
     @State private var selectedRun: Run?
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if openRuns.isEmpty {
-                    ContentUnavailableView(
-                        "No Countdowns Running",
-                        systemImage: "timer",
-                        description: Text("Start a plan from Now or Plans and it'll show up here — even after you close its countdown screen.")
-                    )
-                } else {
-                    List(openRuns) { run in
-                        CountdownRow(run: run)
-                            .contentShape(Rectangle())
-                            .onTapGesture { selectedRun = run }
+        VStack(spacing: 0) {
+            TopBar(title: "ACTIVE")
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: InkMetric.cardToCard) {
+                    if openRuns.isEmpty {
+                        InkEmpty("Nothing running.")
+                    } else {
+                        ForEach(openRuns) { run in
+                            Button {
+                                selectedRun = run
+                            } label: {
+                                CountdownRow(run: run)
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
                 }
+                .padding(.horizontal, InkMetric.page)
+                .padding(.bottom, InkMetric.section)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .navigationTitle("Countdowns")
+            .scrollIndicators(.hidden)
         }
+        .spectrumBackground()
         .fullScreenCover(item: $selectedRun) { run in
             RunView(run: run)
         }
@@ -44,37 +50,47 @@ private struct CountdownRow: View {
     @State private var engine: RunEngine?
 
     var body: some View {
-        HStack(spacing: 12) {
-            if let engine {
-                Image(systemName: engine.currentBlock?.template?.symbol ?? engine.currentBlock?.kind.defaultSymbol ?? "timer")
-                    .font(.title2)
-                    .foregroundStyle(.tint)
-                    .frame(width: 32)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(engine.plan?.name ?? "Plan")
-                        .font(.body.weight(.semibold))
-                    Text(engine.isWaitingToStart
-                         ? "Waiting to start"
-                         : (engine.currentBlock.map { "Step \(run.currentIndex + 1) of \(engine.blocks.count) — \($0.name)" } ?? "Running"))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
-
-                if let target = engine.isWaitingToStart ? engine.naturalStart : engine.currentBlock.flatMap(engine.leaveByDate(for:)) {
-                    Text(target, style: .relative)
-                        .font(.subheadline.monospacedDigit())
-                        .foregroundStyle(engine.isCurrentBlockOverrun ? .orange : .primary)
-                }
-            } else {
-                ProgressView()
-            }
+        StepRowCard(symbol: symbol, name: name, meta: [detail]) {
+            countdown
         }
-        .padding(.vertical, 4)
         .onAppear {
             engine = RunEngineStore.shared.engine(for: run)
+        }
+    }
+
+    private var symbol: String {
+        guard let engine else { return "timer" }
+        if engine.isWaitingToStart { return "hourglass" }
+        return engine.currentBlock?.template?.symbol ?? engine.currentBlock?.kind.defaultSymbol ?? "timer"
+    }
+
+    private var name: String {
+        engine?.plan?.name ?? "Plan"
+    }
+
+    private var detail: String {
+        guard let engine else { return "Starting" }
+        if engine.isWaitingToStart { return "Until start" }
+        guard let block = engine.currentBlock else { return "Running" }
+        return "Step \(run.currentIndex + 1) of \(engine.blocks.count) · \(block.name)"
+    }
+
+    private var target: Date? {
+        guard let engine else { return nil }
+        return engine.isWaitingToStart
+            ? engine.naturalStart
+            : engine.currentBlock.flatMap(engine.leaveByDate(for:))
+    }
+
+    @ViewBuilder
+    private var countdown: some View {
+        if let engine, let target {
+            let left = target.timeIntervalSince(engine.now)
+            let late = left < 0
+            StepRowValue(text: (late ? "+" : "") + TimeFormatting.compactCountdownString(abs(left)),
+                         color: late ? OnTimeSpectrum.late : OnTimeSpectrum.primaryText)
+        } else {
+            StepRowValue(text: "…", color: OnTimeSpectrum.tertiaryText)
         }
     }
 }

@@ -29,10 +29,19 @@ struct QuickBlockEditorSheet: View {
     /// and the routine editor share one step editor rather than growing a
     /// second one that drifts.
     var owningRoutine: ScheduledRoutine? = nil
+    /// Whether the sequence still has room for a flex or walk step. The
+    /// solver can only solve for one open duration per plan; offering the
+    /// second one here just produced a silently unsolvable plan later.
+    var allowsOpenDuration: Bool = true
     let onSave: () -> Void
 
     @State private var name = ""
     @State private var kind: BlockKind = .fixed
+    /// Guards the template-selection round trip: `apply(template)` writes
+    /// the template's name into the field, and without this the `onChange`
+    /// below immediately cleared the very selection it had just made — the
+    /// exact shape of the historical `PlaceSearchField` bug.
+    @State private var isApplyingTemplate = false
     @State private var minutes = 10
     @State private var isOpenEnded = true
     @State private var selectedTemplate: TaskTemplate?
@@ -40,8 +49,8 @@ struct QuickBlockEditorSheet: View {
     @State private var destinationPlace: Place?
     @State private var showingOriginPicker = false
     @State private var targetTime = Date()
-    /// "Override Route — Use Estimate": skips live MapKit routing for this
-    /// step and always uses the manual duration below.
+    /// "Use estimate only": skips live MapKit routing for this step and
+    /// always uses the manual duration below.
     @State private var useManualEstimateOnly = false
     /// Governs what a *template's* remembered origin becomes when it's
     /// "Current Location" — true (default) keeps it live, re-resolved
@@ -63,176 +72,228 @@ struct QuickBlockEditorSheet: View {
         }
     }
 
+    /// The one sheet this view presents: the clock time a `.startAt` step
+    /// counts down to.
+    @State private var pickingTargetTime = false
+
+    /// The kinds this position and this sequence still allow.
+    private var kindOptions: [ChipOption<BlockKind>] {
+        var options = [ChipOption(BlockKind.fixed, "Fixed"), ChipOption(BlockKind.drive, "Drive")]
+        if allowsOpenDuration || kind.isOpenDuration {
+            options.append(ChipOption(BlockKind.flex, "Flex"))
+            options.append(ChipOption(BlockKind.walk, "Walk"))
+        }
+        if isFirstPosition {
+            options.append(ChipOption(BlockKind.startAt, "Starts at"))
+        }
+        return options
+    }
+
+    private var showsDuration: Bool { !kind.isOpenDuration && kind != .startAt }
+
     var body: some View {
         NavigationStack {
-            Form {
-                Section("Title") {
-                    TextField("Optional — e.g. Shower", text: $name)
-                        .onChange(of: name) { _, _ in selectedTemplate = nil }
-
-                    if !matchingTemplates.isEmpty {
-                        ForEach(matchingTemplates.prefix(5)) { template in
-                            Button {
-                                apply(template)
-                            } label: {
-                                HStack {
-                                    Image(systemName: template.symbol)
-                                        .foregroundStyle(.tint)
-                                    VStack(alignment: .leading, spacing: 1) {
-                                        Text(template.name)
-                                            .foregroundStyle(.primary)
-                                        Text("\(template.samples.count) time\(template.samples.count == 1 ? "" : "s") before")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    Spacer()
-                                }
-                            }
-                        }
-                    } else if let selectedTemplate {
-                        Label("Linked to \"\(selectedTemplate.name)\" — this run will count toward its history", systemImage: "checkmark.circle.fill")
-                            .font(.caption)
-                            .foregroundStyle(.green)
-                    }
+            ScrollView {
+                VStack(alignment: .leading, spacing: InkMetric.section) {
+                    titleSection
+                    kindSection
+                    if kind == .walk { walkSection }
+                    if kind == .startAt { startAtSection }
+                    if kind == .drive { routeSection }
+                    durationSection
                 }
-
-                Section("Kind") {
-                    Picker("Kind", selection: $kind) {
-                        Text("Fixed").tag(BlockKind.fixed)
-                        Text("Drive").tag(BlockKind.drive)
-                        Text("Flex (Open)").tag(BlockKind.flex)
-                        if isFirstPosition {
-                            Text("Starts At").tag(BlockKind.startAt)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    if !isFirstPosition {
-                        Text("\"Starts At\" is only available for the first step — everything after it uses a normal duration.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                if kind == .startAt {
-                    Section {
-                        DatePicker("Time", selection: $targetTime, displayedComponents: .hourAndMinute)
-                    } header: {
-                        Text("Starts At")
-                    } footer: {
-                        Text("This step's length is whatever's left until this clock time — set to when you actually want to start, not how long you expect to wait. Tapping Start a minute late just means one fewer minute of waiting, not one more.")
-                    }
-                }
-
-                if kind == .drive {
-                    Section {
-                        Toggle("Override Route — Use Estimate", isOn: $useManualEstimateOnly)
-
-                        if !useManualEstimateOnly {
-                            if showingOriginPicker {
-                                PlaceSearchField(label: "From", place: $originPlace)
-                            } else {
-                                // A menu, not a button that opens the search
-                                // field. Origin defaults to Current Location,
-                                // so the old version made the overwhelmingly
-                                // common case the most tedious one: tapping a
-                                // row that already read "Current Location"
-                                // cleared it and dropped you into a text box
-                                // whose only useful affordance was a chip
-                                // saying "Current Location" — a round trip
-                                // that ended exactly where it started.
-                                // Picking a place is now one tap; searching
-                                // for a new one is still available below.
-                                Menu {
-                                    Button {
-                                        originPlace = currentLocationPlace()
-                                    } label: {
-                                        Label("Current Location", systemImage: "location.fill")
-                                    }
-                                    ForEach(savedPlaces) { saved in
-                                        Button(saved.name) { originPlace = saved }
-                                    }
-                                    Divider()
-                                    Button {
-                                        originPlace = nil
-                                        showingOriginPicker = true
-                                    } label: {
-                                        Label("Search a Place…", systemImage: "magnifyingglass")
-                                    }
-                                } label: {
-                                    HStack {
-                                        Text("From")
-                                            .foregroundStyle(.primary)
-                                        Spacer()
-                                        Text(originPlace?.name ?? "Current Location")
-                                            .foregroundStyle(.secondary)
-                                        Image(systemName: "chevron.up.chevron.down")
-                                            .font(.caption2)
-                                            .foregroundStyle(.tertiary)
-                                    }
-                                }
-                            }
-                            PlaceSearchField(label: "To — search a destination", place: $destinationPlace)
-
-                            // Only matters once there's a template to save
-                            // it on — an untitled step never gets one, so
-                            // the toggle would have nothing to affect.
-                            if !trimmedName.isEmpty, originIsCurrentLocation {
-                                Toggle("Follow My Location", isOn: $followsMyLocationForTemplate)
-                            }
-                        } else {
-                            Text("Route lookup is off for this step — the estimate below is always used.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    } header: {
-                        Text("Route")
-                    } footer: {
-                        if !useManualEstimateOnly, !trimmedName.isEmpty, originIsCurrentLocation {
-                            Text(followsMyLocationForTemplate
-                                 ? "Future steps titled \"\(trimmedName)\" will start from wherever you are then."
-                                 : "Future steps titled \"\(trimmedName)\" will start from right here, not wherever you are then.")
-                        }
-                    }
-                }
-
-                if kind != .flex && kind != .startAt {
-                    Section(kind == .drive ? "Estimated Drive Time" : "Duration") {
-                        DurationScrubber(minutes: $minutes)
-                        if kind == .drive {
-                            Text(useManualEstimateOnly
-                                 ? "Always used — live routing is off for this step."
-                                 : "Used until a live ETA comes in once this step starts.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-
-                Section {
-                    Toggle("Move on automatically when time's up", isOn: $isOpenEnded)
-                } footer: {
-                    Text(isOpenEnded
-                         ? "Bleeds into the next step on its own."
-                         : "Waits for you to tap Next Step — good for a step you want to time and confirm yourself.")
-                }
+                .padding(.horizontal, InkMetric.page)
+                .padding(.top, InkMetric.labelToCard)
+                .padding(.bottom, InkMetric.section)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .navigationTitle(existingBlock == nil ? "New Step" : "Edit Step")
-            .navigationBarTitleDisplayMode(.inline)
+            .scrollIndicators(.hidden)
+            .inkNavigation(title: existingBlock == nil ? "NEW STEP" : "EDIT STEP")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .inkToolbarButton()
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { save() }
-                        .font(.headline)
-                        .disabled(kind == .drive && !useManualEstimateOnly && destinationPlace == nil)
+                        .inkToolbarButton()
+                        .disabled((kind == .drive && !useManualEstimateOnly && destinationPlace == nil)
+                                  || (kind == .walk && destinationPlace == nil))
                 }
+            }
+            .sheet(isPresented: $pickingTargetTime) {
+                FullScreenTimePicker(title: "Starts At", date: $targetTime)
             }
             .onAppear { populate() }
         }
     }
 
+    // MARK: - Sections
+
+    private var titleSection: some View {
+        VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
+            SectionLabel("TITLE")
+
+            InkCard {
+                InkTextRow(placeholder: "Title", text: $name, autocapitalization: .sentences)
+                    .onChange(of: name) { _, _ in
+                        if isApplyingTemplate {
+                            isApplyingTemplate = false
+                            return
+                        }
+                        selectedTemplate = nil
+                    }
+
+                // A step you have done before, offered by name. Tapping one
+                // links this step to its history.
+                ForEach(matchingTemplates.prefix(5)) { template in
+                    Button {
+                        apply(template)
+                    } label: {
+                        InkRow {
+                            Image(systemName: template.symbol)
+                                .foregroundStyle(OnTimeSpectrum.secondaryText)
+                                .frame(width: 24)
+                            Text(template.name)
+                                .font(InkType.rowTitle)
+                                .foregroundStyle(OnTimeSpectrum.primaryText)
+                            Text("\(template.samples.count) before")
+                                .font(InkType.rowMeta)
+                                .foregroundStyle(OnTimeSpectrum.tertiaryText)
+                            Spacer(minLength: 0)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                if matchingTemplates.isEmpty, let selectedTemplate {
+                    InkTextLine(text: "Linked to \(selectedTemplate.name)")
+                }
+            }
+        }
+    }
+
+    private var kindSection: some View {
+        VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
+            SectionLabel("KIND")
+            ChipPicker(options: kindOptions, selection: $kind)
+        }
+    }
+
+    private var walkSection: some View {
+        VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
+            SectionLabel("WALK")
+            InkCard {
+                PlaceSearchField(label: "Back to", place: $destinationPlace)
+            }
+        }
+    }
+
+    private var startAtSection: some View {
+        VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
+            SectionLabel("STARTS AT")
+            InkCard {
+                InkValueRow(title: "Time",
+                            value: TimeFormatting.clockString(targetTime),
+                            chevron: true) { pickingTargetTime = true }
+            }
+        }
+    }
+
+    private var routeSection: some View {
+        VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
+            SectionLabel("ROUTE")
+            InkCard {
+                InkToggleRow(title: "Use estimate only", isOn: $useManualEstimateOnly)
+
+                if !useManualEstimateOnly {
+                    if showingOriginPicker {
+                        PlaceSearchField(label: "From", place: $originPlace)
+                    } else {
+                        // A menu, not a button that opens the search field.
+                        // Origin defaults to Current Location, so the old
+                        // version made the overwhelmingly common case the most
+                        // tedious one: tapping a row that already read
+                        // "Current Location" cleared it and dropped you into a
+                        // text box whose only useful affordance was a chip
+                        // saying "Current Location". Picking a place is now one
+                        // tap; searching for a new one is still available below.
+                        Menu {
+                            Button {
+                                originPlace = currentLocationPlace()
+                            } label: {
+                                Label("Current Location", systemImage: "location.fill")
+                            }
+                            ForEach(savedPlaces) { saved in
+                                Button(saved.name) { originPlace = saved }
+                            }
+                            Divider()
+                            Button {
+                                originPlace = nil
+                                showingOriginPicker = true
+                            } label: {
+                                Label("Search a place", systemImage: "magnifyingglass")
+                            }
+                        } label: {
+                            InkRow {
+                                Text("From")
+                                    .font(InkType.rowTitle)
+                                    .foregroundStyle(OnTimeSpectrum.primaryText)
+                                Spacer(minLength: 8)
+                                Text(originPlace?.name ?? "Current Location")
+                                    .font(InkType.bodyText)
+                                    .foregroundStyle(OnTimeSpectrum.secondaryText)
+                                Image(systemName: "chevron.up.chevron.down")
+                                    .font(.caption2)
+                                    .foregroundStyle(OnTimeSpectrum.tertiaryText)
+                            }
+                        }
+                    }
+
+                    PlaceSearchField(label: "To", place: $destinationPlace)
+
+                    // Only matters once there's a template to save it on: an
+                    // untitled step never gets one, so the toggle would have
+                    // nothing to affect.
+                    if !trimmedName.isEmpty, originIsCurrentLocation {
+                        InkToggleRow(title: "Follow my location", isOn: $followsMyLocationForTemplate)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var durationSection: some View {
+        if showsDuration {
+            VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
+                SectionLabel(kind == .drive ? "DRIVE ESTIMATE" : "DURATION")
+                VStack(spacing: InkMetric.cardToCard) {
+                    InkCard {
+                        InkRow {
+                            DurationScrubber(minutes: $minutes)
+                        }
+                    }
+                    InkCard {
+                        InkToggleRow(title: "Move on automatically", isOn: $isOpenEnded)
+                    }
+                }
+            }
+        } else {
+            InkCard {
+                InkToggleRow(title: "Move on automatically", isOn: $isOpenEnded)
+            }
+        }
+    }
+
     private func apply(_ template: TaskTemplate) {
+        // Guard only when the assignment will actually change the text — a
+        // no-op assignment never fires `onChange`, and a flag left standing
+        // would swallow the user's next keystroke instead. (Today the
+        // autocomplete list excludes exact matches, so the names always
+        // differ; the check is what keeps that assumption from becoming a
+        // trap.)
+        if name != template.name { isApplyingTemplate = true }
         name = template.name
         kind = template.kind
         selectedTemplate = template
@@ -284,9 +345,9 @@ struct QuickBlockEditorSheet: View {
             block.name = displayName
             block.kind = kind
             block.template = template
-            block.estimateOverrideMinutes = (kind == .flex || kind == .startAt) ? nil : minutes
+            block.estimateOverrideMinutes = (kind.isOpenDuration || kind == .startAt) ? nil : minutes
             block.originPlace = resolvedOrigin
-            block.destinationPlace = kind == .drive ? destinationPlace : nil
+            block.destinationPlace = (kind == .drive || kind == .walk) ? destinationPlace : nil
             block.targetHour = targetComps?.hour
             block.targetMinute = targetComps?.minute
             block.isOpenEnded = isOpenEnded
@@ -297,9 +358,9 @@ struct QuickBlockEditorSheet: View {
                 name: displayName,
                 kind: kind,
                 template: template,
-                estimateOverrideMinutes: (kind == .flex || kind == .startAt) ? nil : minutes,
+                estimateOverrideMinutes: (kind.isOpenDuration || kind == .startAt) ? nil : minutes,
                 originPlace: resolvedOrigin,
-                destinationPlace: kind == .drive ? destinationPlace : nil,
+                destinationPlace: (kind == .drive || kind == .walk) ? destinationPlace : nil,
                 targetHour: targetComps?.hour,
                 targetMinute: targetComps?.minute,
                 isOpenEnded: isOpenEnded,
@@ -354,6 +415,7 @@ struct QuickBlockEditorSheet: View {
         case .fixed: return "Step"
         case .drive: return "Drive"
         case .flex: return "Go"
+        case .walk: return "Walk"
         case .startAt: return "Wait"
         }
     }
@@ -373,6 +435,21 @@ struct QuickBlockEditorSheet: View {
     private func snapshotCurrentLocation() -> Place {
         let settings = AppSettings.shared
         guard settings.hasRealLocation else { return currentLocationPlace() }
+        // Reuse before inserting: every re-save with the toggle off used to
+        // mint a brand new identical "Saved Location" row, orphaning the
+        // previous snapshot and filling the origin picker with
+        // indistinguishable entries.
+        if let existing = savedPlaces.first(where: {
+            abs($0.latitude - settings.lastLatitude) < 0.0001
+                && abs($0.longitude - settings.lastLongitude) < 0.0001
+        }) {
+            return existing
+        }
+        if let prior = selectedTemplate?.originPlace, !prior.isCurrentLocation, prior.name == "Saved Location" {
+            prior.latitude = settings.lastLatitude
+            prior.longitude = settings.lastLongitude
+            return prior
+        }
         let place = Place(name: "Saved Location", latitude: settings.lastLatitude, longitude: settings.lastLongitude)
         modelContext.insert(place)
         return place

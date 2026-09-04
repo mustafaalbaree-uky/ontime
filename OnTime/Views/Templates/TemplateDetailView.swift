@@ -18,90 +18,136 @@ struct TemplateDetailView: View {
         template.samples.sorted { $0.recordedAt > $1.recordedAt }
     }
 
+    private var kindOptions: [ChipOption<BlockKind>] {
+        [ChipOption(BlockKind.fixed, "Fixed"),
+         ChipOption(BlockKind.drive, "Drive"),
+         ChipOption(BlockKind.flex, "Flex")]
+    }
+
+    /// A `List` rather than a `ScrollView` only because the history rows
+    /// swipe to delete. Every row in it is a card, so it reads the same.
     var body: some View {
-        Form {
-            Section("Estimate") {
-                HStack {
-                    Text("Learned Duration")
-                    Spacer()
-                    Text("\(learnedEstimate) min")
-                        .font(.title3.bold())
-                        .foregroundStyle(.tint)
-                }
+        List {
+            sectionLabelRow("LEARNED", first: true)
 
-                LabeledContent("Manual Prior") {
-                    DurationScrubber(minutes: $template.manualEstimateMinutes)
-                }
+            VStack(spacing: InkMetric.cardToCard) {
+                Text("\(learnedEstimate) min")
+                    .font(InkType.number)
+                    .monospacedDigit()
+                    .foregroundStyle(OnTimeSpectrum.primaryText)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 18)
+                    .spectrumCard()
 
-                Picker("Kind", selection: Binding(
-                    get: { template.kind },
-                    set: { template.kind = $0 }
-                )) {
-                    Text("Fixed").tag(BlockKind.fixed)
-                    Text("Drive").tag(BlockKind.drive)
-                    Text("Flex (Absorbs)").tag(BlockKind.flex)
-                }
-            }
-
-            Section {
-                if sortedSamples.isEmpty {
-                    Text("No duration observations recorded yet. Samples will be automatically saved when you complete runs.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(sortedSamples) { sample in
-                        HStack {
-                            Text("\(sample.minutes) min")
-                                .font(.body.weight(.medium))
-                            Spacer()
-                            Text(sample.recordedAt, format: .dateTime.month().day().hour().minute())
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
+                InkCard {
+                    InkRow {
+                        Text("Typed estimate")
+                            .font(InkType.rowTitle)
+                            .foregroundStyle(OnTimeSpectrum.primaryText)
+                        Spacer(minLength: 8)
+                        DurationScrubber(minutes: $template.manualEstimateMinutes)
                     }
-                    .onDelete(perform: deleteSample)
                 }
-
-                Button {
-                    showingAddSample = true
-                } label: {
-                    Label("Add Manual Sample", systemImage: "plus")
-                }
-            } header: {
-                Text("Observation History (\(template.samples.count) total)")
             }
+            .inkListRow()
+
+            sectionLabelRow("KIND")
+
+            ChipPicker(options: kindOptions, selection: Binding(
+                get: { template.kind },
+                set: { template.kind = $0 }
+            ))
+            .inkListRow()
+
+            sectionLabelRow("HISTORY · \(template.samples.count)")
+
+            if sortedSamples.isEmpty {
+                InkEmpty("No samples.")
+                    .inkListRow()
+            } else {
+                ForEach(sortedSamples) { sample in
+                    sampleRow(sample)
+                        .inkListRow()
+                        .swipeActions(edge: .trailing) {
+                            Button(role: .destructive) {
+                                modelContext.delete(sample)
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                            .tint(OnTimeSpectrum.late)
+                        }
+                }
+            }
+
+            InkCard {
+                InkButtonRow(title: "Add sample") { showingAddSample = true }
+            }
+            .inkListRow()
         }
-        .navigationTitle(template.name)
-        .navigationBarTitleDisplayMode(.inline)
+        .inkList()
+        .inkNavigation(title: template.name.uppercased())
         .sheet(isPresented: $showingAddSample) {
-            NavigationStack {
-                Form {
-                    LabeledContent("Observed Duration") {
-                        DurationScrubber(minutes: $manualSampleMinutes)
-                    }
-                }
-                .navigationTitle("Add Sample")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") { showingAddSample = false }
-                    }
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Save") {
-                            let sample = DurationSample(minutes: manualSampleMinutes, recordedAt: Date(), template: template)
-                            modelContext.insert(sample)
-                            showingAddSample = false
-                        }
-                    }
-                }
-            }
+            addSampleSheet
         }
     }
 
-    private func deleteSample(at offsets: IndexSet) {
-        let samplesToDelete = offsets.map { sortedSamples[$0] }
-        for sample in samplesToDelete {
-            modelContext.delete(sample)
+    private func sectionLabelRow(_ text: String, first: Bool = false) -> some View {
+        SectionLabel(text)
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+            // The label sits 24 below the section before it and 12 above its
+            // own card. The rows either side carry 5 of their own.
+            .listRowInsets(EdgeInsets(top: first ? InkMetric.labelToCard : InkMetric.section - 5,
+                                      leading: InkMetric.page,
+                                      bottom: InkMetric.labelToCard - 5,
+                                      trailing: InkMetric.page))
+    }
+
+    private func sampleRow(_ sample: DurationSample) -> some View {
+        InkRow {
+            Text("\(sample.minutes) min")
+                .font(InkType.value)
+                .monospacedDigit()
+                .foregroundStyle(OnTimeSpectrum.primaryText)
+            Spacer(minLength: 8)
+            Text(sample.recordedAt, format: .dateTime.month().day().hour().minute())
+                .font(InkType.rowMeta)
+                .foregroundStyle(OnTimeSpectrum.tertiaryText)
+        }
+        .spectrumCard()
+    }
+
+    private var addSampleSheet: some View {
+        NavigationStack {
+            ScrollView {
+                InkCard {
+                    InkRow {
+                        Text("Minutes")
+                            .font(InkType.rowTitle)
+                            .foregroundStyle(OnTimeSpectrum.primaryText)
+                        Spacer(minLength: 8)
+                        DurationScrubber(minutes: $manualSampleMinutes)
+                    }
+                }
+                .padding(.horizontal, InkMetric.page)
+                .padding(.top, InkMetric.labelToCard)
+            }
+            .scrollIndicators(.hidden)
+            .inkNavigation(title: "ADD SAMPLE")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { showingAddSample = false }
+                        .inkToolbarButton()
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        let sample = DurationSample(minutes: manualSampleMinutes, recordedAt: Date(), template: template)
+                        modelContext.insert(sample)
+                        showingAddSample = false
+                    }
+                    .inkToolbarButton()
+                }
+            }
         }
     }
 }

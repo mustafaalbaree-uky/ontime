@@ -26,6 +26,12 @@ final class RunEngine {
 
     private(set) var now = Date()
     private(set) var currentSolution: Solution?
+    /// Why `currentSolution` is nil, when it is nil for a reason the user
+    /// caused (two open duration blocks, most likely). Every call site used
+    /// to `try?` the solver and discard the reason, so an invalid plan just
+    /// went blank — no leave-by times, no lateness, nothing on screen
+    /// saying why.
+    private(set) var solutionErrorMessage: String?
     var autoAdvance: Bool
     var showingActivitiesDisabledAlert = false
     var startFailureMessage: String?
@@ -60,13 +66,21 @@ final class RunEngine {
     }
 
     /// The plan's own required start time — deadline minus every known
-    /// block's duration, ignoring `run.startedAt` entirely. nil for a
-    /// flex-block plan (see `Solver` — start is underdetermined with a flex
-    /// block present).
+    /// block's duration, ignoring `run.startedAt` entirely.
+    ///
+    /// An open duration block contributes zero: the latest possible start
+    /// (zero flex left) is still perfectly well defined, and it is exactly
+    /// the moment a waiting flex or walk plan must begin. Treating such
+    /// plans as having *no* natural start meant an armed flex routine never
+    /// auto-started, never showed a wait countdown, and never got a Live
+    /// Activity — the silent failure was for precisely the routines with
+    /// the most timing risk.
     var naturalStart: Date? {
-        guard let p = plan, !blocks.isEmpty, !blocks.contains(where: { $0.kind == .flex }) else { return nil }
+        guard let p = plan, !blocks.isEmpty else { return nil }
         let durations: [BlockDuration] = blocks.map { block in
-            .known(TimeInterval(TravelTimeService.shared.manualEstimateMinutes(for: block) * 60))
+            block.kind.isOpenDuration
+                ? .known(0)
+                : .known(TimeInterval(TravelTimeService.shared.manualEstimateMinutes(for: block) * 60))
         }
         let input = SolverInput(durations: durations, deadline: p.deadline, start: nil, pinnedFlex: nil)
         return (try? Solver.solve(input))?.start
@@ -74,13 +88,17 @@ final class RunEngine {
 
     /// Whether the current block will move itself along on its own.
     func autoAdvanceEligible(_ block: Block) -> Bool {
-        autoAdvance && block.kind != .flex && block.isOpenEnded
+        // A walk is excluded for the same reason a flex block is: its
+        // duration is not a number anyone knew in advance, so there is no
+        // moment for a timer to declare it over. It ends when you say you
+        // are back.
+        autoAdvance && !block.kind.isOpenDuration && block.isOpenEnded
     }
 
     /// True once the current block has run past its own estimate and
     /// nothing is going to move it along automatically.
     var isCurrentBlockOverrun: Bool {
-        guard !isFinished, let block = currentBlock, block.kind != .flex,
+        guard !isFinished, let block = currentBlock, !block.kind.isOpenDuration,
               !autoAdvanceEligible(block), let target = leaveByDate(for: block) else { return false }
         return target < now
     }
@@ -97,16 +115,32 @@ final class RunEngine {
         resume()
     }
 
+    deinit {
+        // Every removal path stops the timer first, but a RunLoop retains
+        // its timers, so an engine dropped without `stopTicking` would leak
+        // a once-per-second closure forever. Safety net only. Deinit is
+        // nonisolated; every owner of an engine (the store's dictionary,
+        // view state) lives on the main actor, so deallocation happens
+        // there — `assumeIsolated` asserts that instead of assuming it
+        // silently.
+        MainActor.assumeIsolated {
+            timer?.invalidate()
+        }
+    }
+
     /// Starts (or resumes) this engine's own tick — idempotent, safe to
     /// call every time a view attaches to an already-running engine.
     func resume() {
         reconcile()
         recomputeSolution()
+        resumeWalkIfNeeded()
         syncLiveActivityAndNotifications()
         guard timer == nil else { return }
         let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
+        // Lets iOS coalesce wakeups across several open runs' engines.
+        t.tolerance = 0.2
         RunLoop.main.add(t, forMode: .common)
         timer = t
     }
@@ -122,14 +156,22 @@ final class RunEngine {
     private func tick() {
         now = Date()
         checkWaitTimeElapsed()
+        if currentBlock?.kind == .walk {
+            WalkTracker.shared.tick()
+        }
         recomputeSolution()
         let advancedIndex = reconcile()
+        if advancedIndex {
+            // Only an actual advance changes the solution's inputs
+            // mid-tick; recomputing unconditionally on the push branch was
+            // a second full solve every push for nothing.
+            recomputeSolution()
+        }
         let overrun = isCurrentBlockOverrun
         let bucket = rampBucket
         if advancedIndex || overrun != lastPushedOverrun || bucket != lastPushedRampBucket {
             lastPushedOverrun = overrun
             lastPushedRampBucket = bucket
-            recomputeSolution()
             syncLiveActivityAndNotifications()
         }
     }
@@ -144,13 +186,15 @@ final class RunEngine {
 
     /// How far through that span we are, in twentieths. -1 when there is no
     /// span to speak of, so a run with nothing to count down doesn't push.
+    /// The fraction itself is `OnTimeActivityLogic.spanFraction` — the same
+    /// formula the widget's ring tint uses, on purpose: the two sides of
+    /// the process seam drift apart the moment either grows its own copy.
     private var rampBucket: Int {
         let target = isWaitingToStart ? naturalStart : currentBlock.flatMap(leaveByDate(for:))
         guard let target else { return -1 }
-        let span = target.timeIntervalSince(activitySegmentStart)
-        guard span > 0 else { return -1 }
-        let fraction = now.timeIntervalSince(activitySegmentStart) / span
-        return Int((min(max(fraction, 0), 1) * 20).rounded(.down))
+        guard target > activitySegmentStart else { return -1 }
+        let fraction = OnTimeActivityLogic.spanFraction(now: now, segmentStart: activitySegmentStart, target: target)
+        return Int((fraction * 20).rounded(.down))
     }
 
     /// Ends the wait phase, whether triggered by the clock reaching
@@ -179,6 +223,7 @@ final class RunEngine {
         lastPushedOverrun = false
         lastPushedRampBucket = -1
         recomputeSolution()
+        resumeWalkIfNeeded()
         syncLiveActivityAndNotifications()
     }
 
@@ -214,9 +259,10 @@ final class RunEngine {
                 let next = blocks[idx]
                 next.actualStart = cursor
                 next.status = .active
-                if next.kind == .flex && run.pinnedFlexMinutes == nil {
+                if next.kind.isOpenDuration && run.pinnedFlexMinutes == nil {
                     pinFlexIfNeeded()
                 }
+                if next.kind == .walk { beginWalk(next) }
                 if next.kind == .drive {
                     Task {
                         await TravelTimeService.shared.resolve(block: next, departingAt: cursor)
@@ -236,19 +282,28 @@ final class RunEngine {
         return true
     }
 
-    /// `auto: true` means the timer/reconcile fired this, not a tap — skip
-    /// logging a `DurationSample` in that case (an auto-fired advance
-    /// happens at roughly the estimate itself, so it would just echo the
-    /// Estimator's own prior back). Manual taps and the notification-action
-    /// observer keep logging.
-    func advanceStep(auto: Bool = false) {
+    /// Every caller of this is a tap (button, Live Activity intent, or
+    /// notification action) — auto advances flow through `reconcile`, which
+    /// stamps blocks directly, which is why every manual advance logs a
+    /// `DurationSample`. (An `auto:` parameter used to exist for a skip
+    /// branch nothing ever exercised.)
+    func advanceStep() {
+        // A stale "Next Step" tap can arrive after the run already finished
+        // (a delivered notification acted on late, or the Live Activity's
+        // button during its dismissal window). Without this guard it pushed
+        // `currentIndex` past `blocks.count` and overwrote the honestly
+        // backdated `finishedAt` with `Date()`.
+        guard !isFinished else { return }
+
         let currentIdx = run.currentIndex
         if blocks.indices.contains(currentIdx) {
             let completedBlock = blocks[currentIdx]
             completedBlock.actualEnd = Date()
             completedBlock.status = .done
 
-            if !auto, completedBlock.kind != .flex, let template = completedBlock.template {
+            if completedBlock.kind == .walk { WalkTracker.shared.end(for: run.uuid) }
+
+            if !completedBlock.kind.isOpenDuration, let template = completedBlock.template {
                 let elapsedSec = Date().timeIntervalSince(completedBlock.actualStart ?? run.startedAt)
                 let elapsedMins = max(1, Int((elapsedSec / 60.0).rounded()))
                 let sample = DurationSample(minutes: elapsedMins, recordedAt: Date(), template: template)
@@ -265,9 +320,10 @@ final class RunEngine {
             nextBlock.actualStart = Date()
             nextBlock.status = .active
 
-            if nextBlock.kind == .flex && run.pinnedFlexMinutes == nil {
+            if nextBlock.kind.isOpenDuration && run.pinnedFlexMinutes == nil {
                 pinFlexIfNeeded()
             }
+            if nextBlock.kind == .walk { beginWalk(nextBlock) }
 
             if nextBlock.kind == .drive {
                 Task {
@@ -291,11 +347,15 @@ final class RunEngine {
     func cancel() {
         run.finishedAt = Date()
         stopTicking()
+        // Owner-scoped: with two runs open at once, cancelling this one
+        // must not kill the other run's active walk and its armed
+        // turnaround alarm.
+        WalkTracker.shared.end(for: run.uuid)
         if let p = plan {
-            Task { await LiveActivityManager.end(planId: "\(p.id)") }
+            Task { await LiveActivityManager.end(planId: p.uuid.uuidString) }
         }
-        // Only safe to blanket-cancel notifications if nothing else is
-        // running — `RunEngineStore` handles that check before calling this.
+        // `RunEngineStore.cancel` removes this plan's own pending step
+        // notifications right after.
     }
 
     func pinFlexIfNeeded() {
@@ -304,12 +364,40 @@ final class RunEngine {
         run.pinnedFlexMinutes = flexMins
     }
 
+    // MARK: - Walk blocks
+
+    /// Hands the walk tracker its deadline and its way home. Called on
+    /// entry to a `.walk` block and again from every `recomputeSolution`,
+    /// because the be-home-by time is not fixed: adding, editing or
+    /// removing a later step moves it, and the whole feature is a
+    /// comparison against that one number.
+    ///
+    /// `begin` is idempotent for an already-running walk — it updates the
+    /// deadline and leaves the measured path, pace and phase alone — so
+    /// calling it repeatedly is the intended use, not a guard failure.
+    private func beginWalk(_ block: Block) {
+        guard block.kind == .walk, let homeBy = leaveByDate(for: block) else { return }
+        WalkTracker.shared.begin(homeBy: homeBy, home: block.destinationPlace, owner: run.uuid)
+    }
+
+    /// Re-attaches the tracker after the app was killed and relaunched
+    /// mid-walk. `RunEngineStore` rebuilds the engine from the persisted
+    /// `Run`, but `WalkTracker` holds no persisted state of its own, so
+    /// without this the walk would come back with its screen intact and
+    /// nothing behind it. What is lost is the measured path and pace,
+    /// which restart from zero; what survives is the deadline, which is
+    /// the part that matters.
+    private func resumeWalkIfNeeded() {
+        guard let block = currentBlock, block.kind == .walk, !isFinished else { return }
+        beginWalk(block)
+    }
+
     func recomputeSolution() {
         guard let p = plan, !blocks.isEmpty else { return }
 
         var durations: [BlockDuration] = []
         for block in blocks {
-            if block.kind == .flex {
+            if block.kind.isOpenDuration {
                 durations.append(.flex)
             } else {
                 let mins = TravelTimeService.shared.manualEstimateMinutes(for: block)
@@ -326,7 +414,33 @@ final class RunEngine {
             pinnedFlex: pinnedFlexSeconds
         )
 
-        currentSolution = try? Solver.solve(input)
+        do {
+            currentSolution = try Solver.solve(input)
+            solutionErrorMessage = nil
+        } catch let error as SolverError {
+            currentSolution = nil
+            solutionErrorMessage = Self.describe(error)
+        } catch {
+            currentSolution = nil
+            solutionErrorMessage = error.localizedDescription
+        }
+
+        // The walk's deadline is derived from the solution that was just
+        // computed, so it is refreshed here rather than only on entry.
+        if let block = currentBlock, block.kind == .walk, WalkTracker.shared.isActive {
+            beginWalk(block)
+        }
+    }
+
+    private static func describe(_ error: SolverError) -> String {
+        switch error {
+        case .multipleFlexBlocks:
+            return "This plan has more than one flex or walk step, so its times can't be solved. Remove one to get the schedule back."
+        case .underdetermined:
+            return "This plan can't be solved without a start time."
+        case .empty:
+            return "No steps to schedule."
+        }
     }
 
     func schedule(for block: Block) -> BlockSchedule? {
@@ -362,7 +476,7 @@ final class RunEngine {
     /// when it really began: the honest projection, which drifts past
     /// `leaveByDate` exactly as far as the run is behind.
     func projectedEnd(for block: Block) -> Date? {
-        guard block.kind != .flex else { return nil }
+        guard !block.kind.isOpenDuration else { return nil }
         let start = block.actualStart ?? run.startedAt
         let minutes = TravelTimeService.shared.manualEstimateMinutes(for: block)
         return start.addingTimeInterval(TimeInterval(minutes * 60))
@@ -375,6 +489,9 @@ final class RunEngine {
     func targetLabel(for block: Block) -> String {
         if isWaitingToStart { return "Start by" }
         if block.kind == .drive { return "Arrive by" }
+        if block.kind == .walk {
+            return WalkTracker.shared.phase == .returning ? "Home by" : "Turn back by"
+        }
         if block.order >= blocks.count - 1 { return "Done by" }
         return "Finish by"
     }
@@ -390,17 +507,29 @@ final class RunEngine {
 
     func syncLiveActivityAndNotifications() {
         guard let p = plan else { return }
+        let planId = p.uuid.uuidString
+
+        // The Home Screen widget's snapshot moves with the same state the
+        // Live Activity does. `WidgetBridge` compares the encoded payload
+        // before writing, so the twenty ramp-bucket pushes per step do not
+        // become twenty widget reloads.
+        WidgetBridge.shared.setNeedsRefresh()
 
         if isFinished {
+            WalkTracker.shared.end(for: run.uuid)
             // Reached the last step (or was cancelled) while nothing was
             // necessarily watching — `RunEngineStore.retire` only ran from
             // the finished screen's `onAppear`/Done button, so a run that
             // completed in the background kept a 1s timer alive forever.
             stopTicking()
             Task {
-                await LiveActivityManager.finish(planId: "\(p.id)")
-                Notifications.shared.cancelRunNotifications(planId: "\(p.id)")
+                await LiveActivityManager.finish(planId: planId)
+                Notifications.shared.cancelRunNotifications(planId: planId)
             }
+            // Self-retire so an unattended completion doesn't leave a dead
+            // engine (and its whole Run/Plan/Block graph) in the store
+            // until a RunView for this exact run happens to appear.
+            RunEngineStore.shared.retire(run)
             return
         }
 
@@ -408,13 +537,23 @@ final class RunEngine {
             Notifications.shared.scheduleRunNotifications(for: p, solution: sol)
         }
 
-        let target = isWaitingToStart ? naturalStart : currentBlock.flatMap(leaveByDate(for:))
+        // A walk counts down to its turnaround, not to its own end — and
+        // once you have turned around, to the be-home-by time. Feeding that
+        // through the existing `targetLeaveBy` / `targetLabel` pair is why
+        // `OnTimeWidget` needed no changes at all for this feature: the ring
+        // and its green-to-red ramp already draw whatever span they are
+        // handed.
+        var target = isWaitingToStart ? naturalStart : currentBlock.flatMap(leaveByDate(for:))
+        if !isWaitingToStart, currentBlock?.kind == .walk, WalkTracker.shared.isActive,
+           let walkTarget = WalkTracker.shared.activityTarget {
+            target = walkTarget
+        }
         if let block = currentBlock, let target {
-            let planId = "\(p.id)"
             let label = targetLabel(for: block) + " "
             let overrun = isCurrentBlockOverrun
             let segmentStart = activitySegmentStart
-            let endsAtTarget = !isWaitingToStart && endsRunAtTarget(block)
+            let waiting = isWaitingToStart
+            let endsAtTarget = !waiting && endsRunAtTarget(block)
             Task {
                 // Update in place whenever this plan already has a live
                 // activity — see `LiveActivityManager.hasActivity` doc.
@@ -429,12 +568,13 @@ final class RunEngine {
                         totalBlocks: blocks.count,
                         targetLeaveBy: target,
                         segmentStart: segmentStart,
-                        isFlex: block.kind == .flex,
+                        isFlex: block.kind.isOpenDuration,
                         symbol: block.template?.symbol ?? block.kind.defaultSymbol,
-                        isWaiting: isWaitingToStart,
+                        isWaiting: waiting,
                         targetLabel: label,
                         isOverrun: overrun,
                         latenessMinutes: overrun ? latenessMinutes : nil,
+                        startsRunAtTarget: waiting,
                         endsRunAtTarget: endsAtTarget
                     )
                     return
@@ -447,12 +587,13 @@ final class RunEngine {
                     totalBlocks: blocks.count,
                     targetLeaveBy: target,
                     segmentStart: segmentStart,
-                    isFlex: block.kind == .flex,
+                    isFlex: block.kind.isOpenDuration,
                     symbol: block.template?.symbol ?? block.kind.defaultSymbol,
-                    isWaiting: isWaitingToStart,
+                    isWaiting: waiting,
                     targetLabel: label,
                     isOverrun: overrun,
                     latenessMinutes: overrun ? latenessMinutes : nil,
+                    startsRunAtTarget: waiting,
                     endsRunAtTarget: endsAtTarget
                 )
                 switch outcome {

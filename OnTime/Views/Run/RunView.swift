@@ -24,22 +24,20 @@ struct RunView: View {
                 if let engine {
                     if engine.isFinished {
                         finishedView(engine)
-                    } else if engine.isWaitingToStart, let target = engine.naturalStart {
-                        waitTimeView(engine, target)
-                        stepsListView(engine)
-                    } else if let block = engine.currentBlock {
-                        activeBlockView(engine, block)
-                        stepsListView(engine)
-                        controlsView(engine)
+                    } else if blocks.isEmpty {
+                        InkEmpty("No steps.")
+                            .padding(.horizontal, InkMetric.page)
+                            .frame(maxHeight: .infinity, alignment: .top)
                     } else {
-                        ContentUnavailableView("No Steps in Plan", systemImage: "exclamationmark.triangle")
+                        runningLayout(engine)
                     }
                 } else {
                     ProgressView()
+                        .tint(OnTimeSpectrum.primaryText)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
-            .navigationTitle(plan?.name ?? "Run")
-            .navigationBarTitleDisplayMode(.inline)
+            .inkNavigation(title: (plan?.name ?? "Run").uppercased())
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     // Just closes the screen — the run keeps going in the
@@ -51,6 +49,7 @@ struct RunView: View {
                     Button("Close") {
                         dismiss()
                     }
+                    .inkToolbarButton()
                 }
                 if let engine, !engine.isFinished {
                     ToolbarItem(placement: .topBarTrailing) {
@@ -74,7 +73,8 @@ struct RunView: View {
                         } label: {
                             Label(engine.autoAdvance ? "Auto" : "Manual",
                                   systemImage: engine.autoAdvance ? "play.circle.fill" : "hand.tap.fill")
-                                .font(.caption.weight(.semibold))
+                                .font(InkType.label)
+                                .foregroundStyle(OnTimeSpectrum.primaryText)
                         }
                     }
                 }
@@ -93,10 +93,18 @@ struct RunView: View {
                 }
                 Button("Keep Running", role: .cancel) {}
             } message: {
-                Text("This stops the countdown and Live Activity for good. Your plan and its steps aren't deleted — you can start it again from Plans.")
+                // Honest about the consequence: the Plan row survives in
+                // the store, but no screen lists plans, so a cancelled
+                // hand-built sequence is not recoverable from anywhere.
+                // The old copy pointed at a "Plans" screen that was
+                // deleted along with its tab.
+                Text("The countdown and Live Activity end. The sequence cannot be reopened.")
             }
             .sheet(isPresented: $showingAddStep) {
-                TemplateDrawerSheet(templates: templates) { template in
+                TemplateDrawerSheet(
+                    templates: templates,
+                    allowsOpenDuration: !blocks.contains { $0.kind.isOpenDuration }
+                ) { template in
                     insertStep(name: template.name, kind: template.kind, minutes: template.manualEstimateMinutes, template: template)
                 } onAddCustom: { kind, name, minutes in
                     insertStep(name: name, kind: kind, minutes: minutes, template: nil)
@@ -111,9 +119,9 @@ struct RunView: View {
                         UIApplication.shared.open(url)
                     }
                 }
-                Button("Continue without it", role: .cancel) {}
+                Button("Continue", role: .cancel) {}
             } message: {
-                Text("Turn on Live Activities for OnTime in Settings to get a Dynamic Island / Lock Screen countdown. This run still tracks fine without it.")
+                Text("Live Activities are off for OnTime in iOS Settings.")
             }
             .alert("Couldn't start Live Activity", isPresented: .init(
                 get: { engine?.startFailureMessage != nil },
@@ -126,306 +134,265 @@ struct RunView: View {
         }
     }
 
-    // MARK: - Active Block Header
+    // MARK: - Running layout
 
-    private func activeBlockView(_ engine: RunEngine, _ block: Block) -> some View {
-        VStack(spacing: 8) {
-            HStack {
-                Text("STEP \(run.currentIndex + 1) OF \(blocks.count)")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                if block.kind == .flex {
-                    Text("FLEX STEP")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.orange)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.orange.opacity(0.15))
-                        .clipShape(Capsule())
+    /// The same shape as the Now screen, deliberately: the final time on top,
+    /// the sequence under it, and how long until the next thing pinned to the
+    /// bottom.
+    ///
+    /// It used to be a different screen entirely — a card describing the
+    /// active step, then a `List` of "All Steps" in plain system styling,
+    /// then a blue button — so opening Steps mid-run meant re-reading a
+    /// layout you had not seen since you built the sequence, in a visual
+    /// language the rest of the app had stopped using. Same information, same
+    /// arrangement, means Steps is now the *editable* view of the page you
+    /// were already looking at rather than a second screen about the same run.
+    private func runningLayout(_ engine: RunEngine) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                if let message = engine.solutionErrorMessage {
+                    // A swallowed solver error used to die silently here:
+                    // an invalid plan (two open-duration steps, most likely)
+                    // just blanked every leave-by time with nothing saying why.
+                    Label(message, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(OnTimeSpectrum.waiting)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(14)
+                        .spectrumCard()
                 }
-            }
 
-            HStack(spacing: 12) {
-                Image(systemName: block.template?.symbol ?? block.kind.defaultSymbol)
-                    .font(.title)
-                    .foregroundStyle(.tint)
+                finalTimeHeader(engine)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(block.name)
-                        .font(.title2.bold())
-                    if block.kind == .drive, let dest = block.destinationPlace {
-                        Text("Heading to \(dest.name)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                if let block = engine.currentBlock, block.kind == .walk {
+                    WalkCard(engine: engine, block: block)
                 }
-                Spacer()
-            }
 
-            if let targetDate = engine.leaveByDate(for: block) {
-                let diff = targetDate.timeIntervalSince(now)
-                let overrun = engine.isCurrentBlockOverrun
-                HStack(alignment: .firstTextBaseline) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(engine.targetLabel(for: block))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Text(timeString(targetDate))
-                            .font(.title3.bold().monospacedDigit())
-                        // The projection, shown only when it disagrees with
-                        // the target. Two times for one step used to appear
-                        // on this screen with nothing to tell them apart —
-                        // the header counted from when the step actually
-                        // began, the row below and the notifications from
-                        // the deadline — so a late start read as the app
-                        // contradicting itself. Now the target is the
-                        // target, and the drift says it is drift.
-                        if let projected = engine.projectedEnd(for: block),
-                           abs(projected.timeIntervalSince(targetDate)) >= 60 {
-                            let lateBy = Int((projected.timeIntervalSince(targetDate) / 60).rounded())
-                            Text(lateBy > 0
-                                 ? "Heading for \(timeString(projected)), \(lateBy)m late"
-                                 : "Heading for \(timeString(projected)), \(-lateBy)m early")
-                                .font(.caption2)
-                                .foregroundStyle(lateBy > 0 ? Color.orange : Color.secondary)
-                        }
-                    }
-                    Spacer()
-                    VStack(alignment: .trailing, spacing: 2) {
-                        // No "Overdue" — past the estimate just means one of
-                        // two things, both fine: it already auto-advanced
-                        // (this state won't be visible), or it's waiting on
-                        // a manual tap, which "Waiting on you" says plainly
-                        // instead of implying something went wrong.
-                        Text(diff >= 0 ? "Remaining" : (overrun ? "Waiting on you" : "Running"))
-                            .font(.caption)
-                            .foregroundStyle(diff >= 0 ? Color.secondary : (overrun ? Color.orange : Color.secondary))
-                        Text(formatDuration(abs(diff)))
-                            .font(.system(size: 28, weight: .bold, design: .rounded))
-                            .monospacedDigit()
-                            .foregroundStyle(diff >= 0 ? Color.primary : (overrun ? Color.orange : Color.primary))
-                        if overrun, let lateness = engine.latenessMinutes {
-                            Text(lateness > 0 ? "pushes finish ~\(lateness)m late" : "still on time")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                .padding()
-                .background(diff >= 0 ? Color.accentColor.opacity(0.1) : (overrun ? Color.orange.opacity(0.12) : Color.accentColor.opacity(0.1)))
-                .clipShape(RoundedRectangle(cornerRadius: 12))
+                sequenceSection(engine)
             }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 24)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding()
-        .background(Color(uiColor: .secondarySystemBackground))
+        .scrollIndicators(.hidden)
+        .safeAreaInset(edge: .bottom, spacing: 0) { upNextBar(engine) }
     }
 
-    // MARK: - Wait Time (pre-Step-1)
+    /// The plan's deadline, in the same place and the same weight the
+    /// composer gives it — but in plain white, not the moving spectrum.
+    /// The composer keeps the rainbow on its Final Time because building a
+    /// sequence is a screen you look at on purpose; this is the same number
+    /// on a screen you glance at mid-run, and it does not need decorating
+    /// twice.
+    private func finalTimeHeader(_ engine: RunEngine) -> some View {
+        VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
+            SectionLabel("FINAL TIME")
 
-    private func waitTimeView(_ engine: RunEngine, _ target: Date) -> some View {
-        VStack(spacing: 8) {
-            if let block = engine.currentBlock {
-                HStack(spacing: 12) {
-                    Image(systemName: block.template?.symbol ?? block.kind.defaultSymbol)
-                        .font(.title)
-                        .foregroundStyle(.tint)
-                    VStack(alignment: .leading, spacing: 2) {
-                        // Says what's happening right now (waiting), not
-                        // what happens next (starting the step).
-                        Text("Wait Time")
-                            .font(.title2.bold())
-                    }
-                    Spacer()
-                }
+            Text(timeString(engine.plan?.deadline ?? Date()))
+                .font(InkType.display)
+                .monospacedDigit()
+                .foregroundStyle(OnTimeSpectrum.primaryText)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.vertical, 18)
+            .spectrumCard()
+
+            if let minutes = engine.latenessMinutes, minutes > 0 {
+                Text("running \(minutes) min past this")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(OnTimeSpectrum.late)
+            }
+        }
+    }
+
+    private func sequenceSection(_ engine: RunEngine) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionLabel(text: "THE SEQUENCE") {
+                PlusButton { showingAddStep = true }
             }
 
-            let diff = target.timeIntervalSince(now)
+            ForEach(Array(blocks.enumerated()), id: \.element.uuid) { index, block in
+                stepRow(engine, block: block, index: index)
+            }
+        }
+    }
+
+    private func stepRow(_ engine: RunEngine, block: Block, index: Int) -> some View {
+        let done = index < run.currentIndex
+        let current = index == run.currentIndex
+        let state: StepRowState = done ? .done : (current ? .current : .upcoming)
+
+        return StepRowCard(
+            symbol: done ? "checkmark.circle.fill"
+                : (current && engine.isWaitingToStart ? "hourglass"
+                   : (current ? "arrow.right.circle.fill"
+                      : (block.template?.symbol ?? block.kind.defaultSymbol))),
+            name: block.name,
+            meta: meta(for: block, index: index),
+            state: state,
+            // Only not yet reached steps can be removed: a done or active
+            // step has real elapsed time recorded against it that deleting
+            // out from under the run would orphan.
+            onDelete: index > run.currentIndex
+                ? { deleteUpcomingSteps(engine, at: IndexSet(integer: index)) }
+                : nil
+        ) {
+            stepTrailing(engine, block: block, done: done)
+        }
+    }
+
+    private func meta(for block: Block, index: Int) -> [String] {
+        var parts = ["STEP \(index + 1)"]
+        if block.kind == .drive, let dest = block.destinationPlace {
+            parts.append("to \(dest.name)")
+        }
+        if !block.isOpenEnded {
+            parts.append("waits for tap")
+        }
+        return parts
+    }
+
+    @ViewBuilder
+    private func stepTrailing(_ engine: RunEngine, block: Block, done: Bool) -> some View {
+        if block.kind == .flex {
+            badge("FLEX")
+        } else if block.kind == .walk {
+            badge("WALK")
+        } else if let sched = engine.schedule(for: block) {
+            switch sched.constraint {
+            case .hardLeaveBy(let date):
+                Text(timeString(date))
+                    .font(.subheadline.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(done ? OnTimeSpectrum.tertiaryText : OnTimeSpectrum.primaryText)
+            case .flexAbsorbs(let remaining):
+                Text("flex \(Int((remaining / 60.0).rounded()))m")
+                    .font(.subheadline.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(OnTimeSpectrum.waiting)
+            }
+        }
+    }
+
+    /// A kind is not a state, so it is not coloured.
+    private func badge(_ text: String) -> some View {
+        Text(text)
+            .font(InkType.label)
+            .tracking(1.5)
+            .foregroundStyle(OnTimeSpectrum.tertiaryText)
+    }
+
+    /// How long until the next thing, and the button that gets you there.
+    private func upNextBar(_ engine: RunEngine) -> some View {
+        let waiting = engine.isWaitingToStart
+        let target = waiting ? engine.naturalStart : engine.currentBlock.flatMap(engine.leaveByDate(for:))
+        let left = target.map { $0.timeIntervalSince(engine.now) }
+        let late = (left ?? 0) < 0
+
+        return VStack(spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Start step 1 by")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Button {
-                        armTimer(for: target)
-                    } label: {
-                        HStack(spacing: 6) {
-                            Text(timeString(target))
-                                .font(.title3.bold().monospacedDigit())
-                            Image(systemName: "timer")
-                                .font(.caption)
-                                .foregroundStyle(Color.accentColor)
-                        }
+                    Text(waiting ? "UNTIL START" : "UNTIL \((engine.currentBlock?.name ?? "NEXT").uppercased()) IS DUE")
+                        .font(.caption2.weight(.bold))
+                        .tracking(1.5)
+                        .foregroundStyle(OnTimeSpectrum.secondaryText)
+                        .lineLimit(1)
+                    if let left {
+                        Text((late ? "+" : "") + TimeFormatting.countdownString(abs(left)))
+                            .font(InkType.number)
+                            .monospacedDigit()
+                            .foregroundStyle(late ? OnTimeSpectrum.late : OnTimeSpectrum.primaryText)
+                    } else {
+                        Text("…")
+                            .font(InkType.number)
+                            .foregroundStyle(OnTimeSpectrum.tertiaryText)
                     }
-                    .buttonStyle(.plain)
                 }
                 Spacer()
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text(diff >= 0 ? "Remaining" : "Late")
-                        .font(.caption)
-                        .foregroundStyle(diff >= 0 ? Color.secondary : Color.red)
-                    Text(formatDuration(abs(diff)))
-                        .font(.system(size: 28, weight: .bold, design: .rounded))
-                        .monospacedDigit()
-                        .foregroundStyle(diff >= 0 ? Color.primary : Color.red)
-                }
-            }
-            .padding()
-            .background(diff >= 0 ? Color.accentColor.opacity(0.1) : Color.red.opacity(0.15))
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-
-            Button {
-                engine.beginFirstStepNow()
-            } label: {
-                HStack {
-                    Spacer()
-                    Text("Start Step 1 Now")
-                        .font(.headline)
-                        .foregroundStyle(.white)
-                    Spacer()
-                }
-                .padding()
-                .background(Color.accentColor)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-            }
-        }
-        .padding()
-        .background(Color(uiColor: .secondarySystemBackground))
-    }
-
-    // MARK: - Steps List
-
-    private func stepsListView(_ engine: RunEngine) -> some View {
-        List {
-            Section("All Steps") {
-                ForEach(Array(blocks.enumerated()), id: \.element.id) { index, block in
-                    HStack(spacing: 12) {
-                        if index < run.currentIndex {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(.green)
-                        } else if index == run.currentIndex && engine.isWaitingToStart {
-                            Image(systemName: "hourglass")
-                                .foregroundStyle(.orange)
-                        } else if index == run.currentIndex {
-                            Image(systemName: "arrow.right.circle.fill")
-                                .foregroundStyle(.tint)
-                        } else {
-                            Image(systemName: "circle")
-                                .foregroundStyle(.secondary)
-                        }
-
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(block.name)
-                                .font(.body.weight(index == run.currentIndex ? .bold : .regular))
-                                .foregroundStyle(index < run.currentIndex ? .secondary : .primary)
-
-                            if block.kind == .flex {
-                                Text("Flex step")
-                                    .font(.caption)
-                                    .foregroundStyle(.orange)
-                            } else {
-                                Text("\(TravelTimeService.shared.manualEstimateMinutes(for: block)) min")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-
-                        Spacer()
-
-                        if let sched = engine.schedule(for: block) {
-                            switch sched.constraint {
-                            case .hardLeaveBy(let date):
-                                Text(timeString(date))
-                                    .font(.subheadline.monospacedDigit())
-                                    .foregroundStyle(index < run.currentIndex ? .secondary : .primary)
-                            case .flexAbsorbs(let rem):
-                                let remMin = Int((rem / 60.0).rounded())
-                                Text("flex: \(remMin)m")
-                                    .font(.subheadline.monospacedDigit())
-                                    .foregroundStyle(.orange)
-                            }
-                        }
+                if let t = target {
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text("AT")
+                            .font(.caption2.weight(.bold))
+                            .tracking(1.5)
+                            .foregroundStyle(OnTimeSpectrum.secondaryText)
+                        Text(timeString(t))
+                            .font(.headline.monospacedDigit())
+                            .foregroundStyle(OnTimeSpectrum.secondaryText)
                     }
-                    .padding(.vertical, 2)
-                }
-                // Only not-yet-reached steps can be safely removed — a done
-                // or currently-active step has real elapsed time recorded
-                // against it that deleting out from under the run would
-                // orphan.
-                .onDelete { offsets in
-                    deleteUpcomingSteps(engine, at: offsets)
-                }
-
-                Button {
-                    showingAddStep = true
-                } label: {
-                    Label("Add Step", systemImage: "plus")
                 }
             }
-        }
-    }
 
-    // MARK: - Controls
-
-    private func controlsView(_ engine: RunEngine) -> some View {
-        VStack(spacing: 8) {
             Button {
-                engine.advanceStep()
+                if waiting { engine.beginFirstStepNow() } else { engine.advanceStep() }
             } label: {
-                HStack {
-                    Spacer()
-                    Text(run.currentIndex + 1 >= blocks.count ? "Finish Run" : "Next Step")
-                        .font(.headline)
-                        .foregroundStyle(.white)
-                    Spacer()
-                }
-                .padding()
-                .background(Color.accentColor)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
+                Label(waiting ? "Start Step 1 Now"
+                      : (run.currentIndex + 1 >= blocks.count ? "Finish" : "Next Step"),
+                      systemImage: waiting ? "play.fill" : "checkmark.circle.fill")
+                    .font(.headline)
+                    .foregroundStyle(OnTimeSpectrum.primaryText)
             }
+            .buttonStyle(SpectrumButtonStyle())
         }
-        .padding()
-        .background(Color(uiColor: .systemBackground))
+        .padding(.horizontal, 20)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
+        .background(OnTimeSpectrum.ink.opacity(0.96))
+        .overlay(alignment: .top) {
+            Rectangle().fill(OnTimeSpectrum.hairline).frame(height: 1)
+        }
     }
 
     // MARK: - Finished View
 
     private func finishedView(_ engine: RunEngine) -> some View {
-        VStack(spacing: 20) {
-            Spacer()
-            Image(systemName: "checkmark.seal.fill")
-                .font(.system(size: 72))
-                .foregroundStyle(.green)
+        let diff = plan.map { $0.deadline.timeIntervalSince(now) }
+        let late = (diff ?? 0) < 0
 
-            Text("Run Complete!")
-                .font(.largeTitle.bold())
+        return VStack(spacing: 16) {
+            Spacer()
+
+            Text("FINISHED")
+                .font(InkType.label)
+                .tracking(1.5)
+                .foregroundStyle(OnTimeSpectrum.secondaryText)
+
+            if let diff {
+                let minutes = Int((abs(diff) / 60.0).rounded())
+                Text("\(minutes) min \(late ? "late" : "early")")
+                    .font(InkType.hero)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                    .foregroundStyle(late ? OnTimeSpectrum.late : OnTimeSpectrum.primaryText)
+            }
 
             if let p = plan {
-                let diff = p.deadline.timeIntervalSince(now)
-                if diff >= 0 {
-                    let minsEarly = Int((diff / 60.0).rounded())
-                    Text("You made it with \(minsEarly) min to spare!")
-                        .font(.headline)
-                        .foregroundStyle(.secondary)
-                } else {
-                    let minsLate = Int((-diff / 60.0).rounded())
-                    Text("Finished \(minsLate) min past deadline.")
-                        .font(.headline)
-                        .foregroundStyle(.red)
-                }
+                Text("\(p.name) · \(timeString(p.deadline))")
+                    .font(InkType.bodyText)
+                    .foregroundStyle(OnTimeSpectrum.secondaryText)
             }
 
             Spacer()
-
-            Button("Done") {
-                RunEngineStore.shared.retire(run)
-                dismiss()
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .padding(.bottom, 24)
         }
-        .padding()
+        .padding(.horizontal, InkMetric.page)
+        .frame(maxWidth: .infinity)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                Button {
+                    RunEngineStore.shared.retire(run)
+                    dismiss()
+                } label: {
+                    Text("Done")
+                        .font(InkType.buttonProminent)
+                        .foregroundStyle(OnTimeSpectrum.primaryText)
+                }
+                .buttonStyle(SpectrumButtonStyle())
+            }
+            .padding(.horizontal, InkMetric.page)
+            .padding(.top, 12)
+            .padding(.bottom, 8)
+            .background(OnTimeSpectrum.ink.opacity(0.96))
+            .overlay(alignment: .top) {
+                Rectangle().fill(OnTimeSpectrum.hairline).frame(height: 1)
+            }
+        }
         .onAppear {
             RunEngineStore.shared.retire(run)
         }
@@ -456,7 +423,14 @@ struct RunView: View {
             kind: kind,
             template: template,
             estimateOverrideMinutes: template == nil ? minutes : nil,
-            resolvedMinutes: minutes
+            resolvedMinutes: minutes,
+            // A remembered drive's route has to come along, or the inserted
+            // step can never resolve a live ETA (and an inserted walk has
+            // no home coordinate); `QuickBlockEditorSheet.apply` copies
+            // these in the equivalent flow.
+            originPlace: template?.originPlace,
+            destinationPlace: template?.destinationPlace,
+            useManualEstimateOnly: template?.useManualEstimateOnly ?? false
         )
         newBlock.plan = p
         modelContext.insert(newBlock)
@@ -474,7 +448,7 @@ struct RunView: View {
 
     private func deleteUpcomingSteps(_ engine: RunEngine, at offsets: IndexSet) {
         guard let p = plan else { return }
-        var ordered = p.orderedBlocks
+        let ordered = p.orderedBlocks
         for index in offsets {
             guard index > run.currentIndex || (index == run.currentIndex && engine.isWaitingToStart) else { continue }
             modelContext.delete(ordered[index])
@@ -494,31 +468,10 @@ struct RunView: View {
         engine.syncLiveActivityAndNotifications()
     }
 
-    // MARK: - Timer
-
-    /// Opens the "OnTime Timer" Shortcut with the calculated duration.
-    /// The Shortcut creates an actual timer in the Clock app.
-    private func armTimer(for target: Date) {
-        guard target > Date() else { return }
-
-        let seconds = max(1, Int(target.timeIntervalSince(Date()).rounded()))
-
-        // Open the "OnTime Timer" Shortcut with the calculated duration
-        // The Shortcut accepts the number of seconds as input
-        let encodedSecondsText = "\(seconds)".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "\(seconds)"
-        let urlString = "shortcuts://run-shortcut?name=OnTime%20Timer&input=text&text=\(encodedSecondsText)"
-
-        if let url = URL(string: urlString) {
-            UIApplication.shared.open(url)
-        }
-    }
-
     // MARK: - Formatting
 
     private func timeString(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.dateFormat = "h:mm a"
-        return f.string(from: date)
+        TimeFormatting.clockString(date)
     }
 
     private func formatDuration(_ ti: TimeInterval) -> String {

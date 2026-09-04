@@ -18,9 +18,17 @@ enum RunLauncher {
     /// before save). Their `order` is renumbered via `Plan.renumber()`
     /// after being claimed, so callers don't need to pre-sort them. Always
     /// builds a brand-new `Plan`, so there's nothing to conflict with.
+    ///
+    /// `startedAt` and `routine` exist for `ScheduleService.arm`: the run
+    /// must be *born* backdated to the arm moment with its provenance set,
+    /// because the engine (created here, synchronously) computes its first
+    /// solution and pushes its first Live Activity during this call — a
+    /// backdate applied afterwards left that first push with the wrong
+    /// span, exactly the state backdating exists to protect.
     @discardableResult
-    static func start(deadline: Date, name: String, blocks: [Block], in context: ModelContext) -> Run {
-        let plan = Plan(name: name, deadline: deadline)
+    static func start(deadline: Date, name: String, blocks: [Block], in context: ModelContext,
+                      startedAt: Date = Date(), routine: ScheduledRoutine? = nil) -> Run {
+        let plan = Plan(name: name, deadline: deadline, routine: routine)
         context.insert(plan)
 
         for block in blocks {
@@ -29,7 +37,7 @@ enum RunLauncher {
         }
         plan.renumber()
 
-        let run = Run(plan: plan, startedAt: Date(), currentIndex: 0)
+        let run = Run(plan: plan, startedAt: startedAt, currentIndex: 0)
         context.insert(run)
         RunEngineStore.shared.engine(for: run)
 

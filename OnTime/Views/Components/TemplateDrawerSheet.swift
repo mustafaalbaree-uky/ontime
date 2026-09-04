@@ -2,11 +2,16 @@ import SwiftUI
 
 /// "Add Step" mid-run: pick a remembered `TaskTemplate`, or build a one-off
 /// step inline. Lived inside `PlanEditorView.swift` until that file was
-/// deleted along with the Plans tab — `RunView` is the only caller now, so
-/// it moved here rather than dying with its old host.
+/// deleted along with the Plans tab. `RunView` is the only caller now, so it
+/// moved here rather than dying with its old host.
 struct TemplateDrawerSheet: View {
     @Environment(\.dismiss) private var dismiss
     let templates: [TaskTemplate]
+    /// False once the plan already holds a flex or walk step: the solver can
+    /// only solve for one open duration, so the drawer hides the Flex custom
+    /// kind and filters open duration templates rather than letting the
+    /// insert silently blank the whole schedule.
+    var allowsOpenDuration: Bool = true
     let onSelect: (TaskTemplate) -> Void
     let onAddCustom: (BlockKind, String, Int) -> Void
 
@@ -14,64 +19,98 @@ struct TemplateDrawerSheet: View {
     @State private var customKind: BlockKind = .fixed
     @State private var customMinutes = 10
 
+    private var offeredTemplates: [TaskTemplate] {
+        allowsOpenDuration ? templates : templates.filter { !$0.kind.isOpenDuration }
+    }
+
+    private var kindOptions: [ChipOption<BlockKind>] {
+        var options = [ChipOption(BlockKind.fixed, "Fixed"), ChipOption(BlockKind.drive, "Drive")]
+        if allowsOpenDuration {
+            options.append(ChipOption(BlockKind.flex, "Flex"))
+        }
+        return options
+    }
+
     var body: some View {
         NavigationStack {
-            List {
-                Section("Steps You've Done Before") {
-                    if templates.isEmpty {
-                        Text("Nothing remembered yet — steps get remembered automatically once you name them. Add a custom step below.")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(templates) { template in
-                            Button {
-                                onSelect(template)
-                            } label: {
-                                HStack(spacing: 12) {
-                                    Image(systemName: template.symbol)
-                                        .font(.title3)
-                                        .frame(width: 28)
-                                        .foregroundStyle(.tint)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(template.name)
-                                            .font(.body.weight(.medium))
-                                            .foregroundStyle(.primary)
-                                        Text("\(template.manualEstimateMinutes) min • \(template.kind.rawValue.capitalized)")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    Spacer()
-                                    Image(systemName: "plus.circle.fill")
-                                        .foregroundStyle(.tint)
-                                }
-                            }
-                        }
-                    }
+            ScrollView {
+                VStack(alignment: .leading, spacing: InkMetric.section) {
+                    beforeSection
+                    customSection
                 }
-
-                Section("Custom Step") {
-                    TextField("Step Name", text: $customName)
-                    Picker("Kind", selection: $customKind) {
-                        Text("Fixed").tag(BlockKind.fixed)
-                        Text("Drive").tag(BlockKind.drive)
-                        Text("Flex (Open)").tag(BlockKind.flex)
-                    }
-                    if customKind != .flex {
-                        LabeledContent("Duration") {
-                            DurationScrubber(minutes: $customMinutes)
-                        }
-                    }
-                    Button("Add Custom Step") {
-                        onAddCustom(customKind, customName.trimmingCharacters(in: .whitespacesAndNewlines), customMinutes)
-                    }
-                    .disabled(customName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
+                .padding(.horizontal, InkMetric.page)
+                .padding(.top, InkMetric.labelToCard)
+                .padding(.bottom, InkMetric.section)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .navigationTitle("Add Step")
-            .navigationBarTitleDisplayMode(.inline)
+            .scrollIndicators(.hidden)
+            .inkNavigation(title: "ADD STEP")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
+                        .inkToolbarButton()
+                }
+            }
+        }
+    }
+
+    private var beforeSection: some View {
+        VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
+            SectionLabel("BEFORE")
+
+            if offeredTemplates.isEmpty {
+                InkEmpty("Nothing remembered.")
+            } else {
+                InkCard {
+                    ForEach(offeredTemplates) { template in
+                        Button {
+                            onSelect(template)
+                        } label: {
+                            InkRow {
+                                Image(systemName: template.symbol)
+                                    .foregroundStyle(OnTimeSpectrum.secondaryText)
+                                    .frame(width: 24)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(template.name)
+                                        .font(InkType.rowTitle)
+                                        .foregroundStyle(OnTimeSpectrum.primaryText)
+                                    Text("\(template.manualEstimateMinutes) min · \(template.kind.rawValue.capitalized)")
+                                        .font(InkType.rowMeta)
+                                        .foregroundStyle(OnTimeSpectrum.tertiaryText)
+                                }
+                                Spacer(minLength: 8)
+                                Image(systemName: "plus")
+                                    .font(InkType.label)
+                                    .foregroundStyle(OnTimeSpectrum.tertiaryText)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+
+    private var customSection: some View {
+        VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
+            SectionLabel("CUSTOM")
+
+            InkCard {
+                InkTextRow(placeholder: "Name", text: $customName)
+
+                InkRow {
+                    ChipPicker(options: kindOptions, selection: $customKind)
+                }
+
+                if customKind != .flex {
+                    InkRow {
+                        DurationScrubber(minutes: $customMinutes)
+                    }
+                }
+
+                InkButtonRow(title: "Add step",
+                             enabled: !customName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) {
+                    onAddCustom(customKind, customName.trimmingCharacters(in: .whitespacesAndNewlines), customMinutes)
                 }
             }
         }

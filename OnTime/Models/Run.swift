@@ -5,6 +5,10 @@ import SwiftData
 /// later stage) actually drives.
 @Model
 final class Run {
+    /// Stable identity for `RunEngineStore`'s engine map and the walk
+    /// tracker's ownership check — see `Plan.uuid` for why a
+    /// `persistentModelID` is not usable as a key here.
+    var uuid: UUID = UUID()
     var plan: Plan?
     var startedAt: Date = Date()
     var currentIndex: Int = 0

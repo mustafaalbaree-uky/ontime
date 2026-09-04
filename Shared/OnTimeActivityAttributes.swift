@@ -37,8 +37,16 @@ public struct OnTimeActivityAttributes: ActivityAttributes {
         /// projected to finish, recomputed live from the solver — only
         /// shown once `isOverrun`, answering "how is this pushing my final
         /// deadline" instead of just showing a step counting up with no
-        /// context. nil / <= 0 means still on track.
+        /// context. <= 0 means still on track; nil means the app has no
+        /// current number (no solution, or the wait phase), and the widget
+        /// renders it via `OnTimeActivityLogic.overCaption` rather than
+        /// claiming anything about lateness.
         public var latenessMinutes: Int?
+        /// True while waiting when the run will begin step 1 on its own the
+        /// moment the start time arrives (backdated on the next app wake).
+        /// Lets the widget say "step 1 underway" for a passed wait target
+        /// instead of the false "waiting on you".
+        public var startsRunAtTarget: Bool
         /// True when this is the last step and it ends the run by itself
         /// at `targetLeaveBy`. The app is usually suspended by then and
         /// cannot end anything, so the widget uses this together with
@@ -61,6 +69,7 @@ public struct OnTimeActivityAttributes: ActivityAttributes {
             targetLabel: String = "Finish by ",
             isOverrun: Bool = false,
             latenessMinutes: Int? = nil,
+            startsRunAtTarget: Bool = false,
             endsRunAtTarget: Bool = false
         ) {
             self.planName = planName
@@ -76,6 +85,7 @@ public struct OnTimeActivityAttributes: ActivityAttributes {
             self.targetLabel = targetLabel
             self.isOverrun = isOverrun
             self.latenessMinutes = latenessMinutes
+            self.startsRunAtTarget = startsRunAtTarget
             self.endsRunAtTarget = endsRunAtTarget
         }
     }

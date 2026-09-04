@@ -1,105 +1,181 @@
 import SwiftUI
+import UIKit
+import UserNotifications
 
 struct SettingsView: View {
     @State private var settings = AppSettings.shared
     @State private var locationService = LocationService.shared
+    @Environment(\.openURL) private var openURL
+    @Environment(\.scenePhase) private var scenePhase
+
+    /// Refreshed on every appearance and foreground: nothing else in the
+    /// app ever re-reads notification authorization after the launch
+    /// prompt, so one denial used to silently kill the routine arm alarms,
+    /// step alerts, and every walk alarm with no indication anywhere.
+    @State private var notificationsDenied = false
 
     var body: some View {
         NavigationStack {
-            List {
-                Section("Estimation") {
-                    Toggle("Safe Confidence (p80)", isOn: $settings.confidenceIsSafe)
-                    Text(settings.confidenceIsSafe
-                         ? "Estimates use the 80th percentile to protect against being late."
-                         : "Estimates use the 50th percentile (typical median duration).")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+            VStack(spacing: 0) {
+                TopBar(title: "SETTINGS")
 
-                Section("Running") {
-                    Toggle("Auto-Advance Steps", isOn: $settings.autoAdvanceEnabled)
-                    Text(settings.autoAdvanceEnabled
-                         ? "A step moves to the next one on its own once its estimated duration elapses. You can still tap Next early."
-                         : "You tap Next Step to advance, which is also how actual durations get measured for future estimates.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Section {
-                    NavigationLink {
-                        LearnedStepsView()
-                    } label: {
-                        Label("Learned Steps", systemImage: "square.stack")
+                ScrollView {
+                    VStack(alignment: .leading, spacing: InkMetric.section) {
+                        if notificationsDenied { permissionSection }
+                        estimatesSection
+                        runningSection
+                        notificationsSection
+                        stepsSection
+                        travelSection
+                        walksSection
+                        locationSection
+                        developerSection
+                        aboutSection
                     }
-                } footer: {
-                    Text("Steps get remembered automatically the first time you name one. This is where their measured durations live.")
+                    .padding(.horizontal, InkMetric.page)
+                    .padding(.bottom, InkMetric.section)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .scrollIndicators(.hidden)
+            }
+            .spectrumBackground()
+            .toolbar(.hidden, for: .navigationBar)
+            .task { await refreshNotificationStatus() }
+            .onChange(of: scenePhase) { _, phase in
+                guard phase == .active else { return }
+                Task { await refreshNotificationStatus() }
+            }
+        }
+    }
 
-                Section("Travel") {
-                    NavigationLink {
-                        PlacesView()
-                    } label: {
-                        Label("Saved Places", systemImage: "mappin.and.ellipse")
-                    }
+    // MARK: - Sections
 
-                    Stepper("Lead Warning: \(settings.defaultLeadWarningMinutes) min",
-                            value: $settings.defaultLeadWarningMinutes, in: 1...30)
-                }
-
-                Section("Location") {
-                    HStack {
-                        Text("GPS Status")
-                        Spacer()
-                        Text(settings.hasRealLocation ? "Acquired" : "Default / Stored")
-                            .foregroundStyle(settings.hasRealLocation ? .green : .secondary)
-                    }
-
-                    if settings.hasRealLocation {
-                        HStack {
-                            Text("Coordinates")
-                            Spacer()
-                            Text(locationService.lastFixDescription
-                                 ?? String(format: "%.4f, %.4f", settings.lastLatitude, settings.lastLongitude))
-                                .foregroundStyle(.secondary)
-                        }
-                        // "Acquired" stays true forever once a fix has ever
-                        // landed, so without the age it says the same thing
-                        // for a coordinate from ten seconds ago and one from
-                        // last Tuesday's parking spot.
-                        if let at = settings.lastFixAt {
-                            HStack {
-                                Text("Last Fix")
-                                Spacer()
-                                Text(at, style: .relative)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-
-                    Button(locationService.isAcquiring ? "Getting Location…" : "Request Live Location") {
-                        locationService.requestLocation()
-                    }
-                    .disabled(locationService.isAcquiring)
-                }
-
-                Section("Developer") {
-                    Toggle("Developer Mode", isOn: $settings.developerModeEnabled)
-                    Text("Shows a debug panel on the Now screen: GPS fix state and per drive-step ETA source/errors.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Section("About") {
-                    HStack {
-                        Text("Build")
-                        Spacer()
-                        Text(buildStamp)
-                            .foregroundStyle(.secondary)
-                    }
+    private var permissionSection: some View {
+        section("NOTIFICATIONS") {
+            InkTextLine(text: "Notifications are off for OnTime.",
+                        color: OnTimeSpectrum.waiting, font: InkType.bodyText)
+            InkButtonRow(title: "Open iOS Settings") {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    openURL(url)
                 }
             }
-            .navigationTitle("Settings")
         }
+    }
+
+    private var estimatesSection: some View {
+        section("ESTIMATES") {
+            InkToggleRow(title: "Safe estimates (p80)", isOn: $settings.confidenceIsSafe)
+        }
+    }
+
+    private var runningSection: some View {
+        section("RUNNING") {
+            InkToggleRow(title: "Auto advance steps", isOn: $settings.autoAdvanceEnabled)
+            InkToggleRow(title: "Last step on top", isOn: $settings.sequenceNewestFirst)
+        }
+    }
+
+    private var notificationsSection: some View {
+        section("NOTIFICATIONS") {
+            InkToggleRow(title: "Sound", isOn: $settings.notificationSoundEnabled)
+            InkToggleRow(title: "Early warning per step", isOn: $settings.leadWarningsEnabled)
+            InkStepperRow(title: "Early warning", value: $settings.defaultLeadWarningMinutes,
+                          range: 1...30, unit: "min")
+        }
+    }
+
+    private var stepsSection: some View {
+        VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
+            SectionLabel("STEPS")
+            InkCard {
+                NavigationLink {
+                    LearnedStepsView()
+                } label: {
+                    InkNavRow(title: "Learned steps", symbol: "square.stack")
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private var travelSection: some View {
+        VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
+            SectionLabel("TRAVEL")
+            InkCard {
+                NavigationLink {
+                    PlacesView()
+                } label: {
+                    InkNavRow(title: "Saved places", symbol: "mappin.and.ellipse")
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private var walksSection: some View {
+        section("WALKS") {
+            InkStepperRow(title: "Safety margin", value: $settings.walkSafetyPercent,
+                          range: 0...50, step: 5, unit: "%")
+            InkStepperRow(title: "Heads up", value: $settings.walkHeadsUpMinutes,
+                          range: 0...30, unit: "min")
+        }
+    }
+
+    private var locationSection: some View {
+        section("LOCATION") {
+            InkValueRow(title: "GPS",
+                        value: settings.hasRealLocation ? "Acquired" : "Stored",
+                        valueColor: settings.hasRealLocation ? OnTimeSpectrum.done : OnTimeSpectrum.secondaryText)
+
+            if settings.hasRealLocation {
+                InkValueRow(title: "Coordinates",
+                            value: locationService.lastFixDescription
+                                ?? String(format: "%.4f, %.4f", settings.lastLatitude, settings.lastLongitude),
+                            valueColor: OnTimeSpectrum.secondaryText)
+                if let at = settings.lastFixAt {
+                    InkValueRow(title: "Last fix",
+                                value: at.formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated)),
+                                valueColor: OnTimeSpectrum.secondaryText)
+                }
+            }
+
+            InkButtonRow(title: locationService.isAcquiring ? "Getting location…" : "Request location",
+                         enabled: !locationService.isAcquiring) {
+                locationService.requestLocation()
+            }
+        }
+    }
+
+    private var developerSection: some View {
+        section("DEVELOPER") {
+            InkToggleRow(title: "Developer mode", isOn: $settings.developerModeEnabled)
+            if settings.developerModeEnabled {
+                InkButtonRow(title: "Clear ETA cache") {
+                    TravelTimeService.shared.clearCache()
+                }
+            }
+        }
+    }
+
+    private var aboutSection: some View {
+        section("ABOUT") {
+            InkValueRow(title: "Build", value: buildStamp,
+                        valueColor: OnTimeSpectrum.secondaryText)
+        }
+    }
+
+    /// A label over one card of rows, which is what every section here is.
+    private func section<Content: View>(_ label: String,
+                                        @ViewBuilder content: @escaping () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
+            SectionLabel(label)
+            InkCard { content() }
+        }
+    }
+
+    private func refreshNotificationStatus() async {
+        let status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+        notificationsDenied = status == .denied
     }
 
     private var buildStamp: String {

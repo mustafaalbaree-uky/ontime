@@ -2,7 +2,7 @@ import SwiftUI
 import SwiftData
 
 /// Name, one time, the days it runs, and the steps. Deliberately the same
-/// shape as the Now screen — anchor time on top, sequence underneath — and
+/// shape as the Now screen, anchor time on top and sequence underneath, and
 /// it uses `QuickBlockEditorSheet` for steps rather than a second step
 /// editor, so there is exactly one place in the app that asks what a step is.
 /// (There used to be four, with three different labels for `.flex` between
@@ -13,113 +13,207 @@ struct ScheduledRoutineEditor: View {
 
     @Bindable var routine: ScheduledRoutine
 
-    @State private var showingAddStep = false
-    @State private var editingBlock: Block?
-    @State private var showingTimePicker = false
+    /// One route rather than three booleans and three stacked `.sheet`
+    /// modifiers. SwiftUI honours a single sheet presentation per view, so
+    /// stacking them meant only the last one could ever open, and tapping a
+    /// step row or Add Step got the time picker instead. Same fix as
+    /// `SequenceComposer.Sheet`, same reason.
+    private enum Sheet: Identifiable {
+        case anchorTime
+        case addStep
+        case editStep(Block)
+
+        var id: String {
+            switch self {
+            case .anchorTime: return "anchorTime"
+            case .addStep: return "addStep"
+            case .editStep(let block): return "editStep-\(block.uuid.uuidString)"
+            }
+        }
+    }
+
+    @State private var sheet: Sheet?
 
     private var blocks: [Block] { routine.orderedBlocks }
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("Name") {
-                    TextField("e.g. Evening at the masjid", text: $routine.name)
-                }
-
-                Section {
-                    Button {
-                        showingTimePicker = true
-                    } label: {
-                        HStack {
-                            Text("Be done by")
-                                .foregroundStyle(.primary)
-                            Spacer()
-                            Text(timeString(hour: routine.anchorHour, minute: routine.anchorMinute))
-                                .font(.headline.monospacedDigit())
-                                .foregroundStyle(.tint)
-                        }
-                    }
-                } header: {
-                    Text("Anchor Time")
-                } footer: {
-                    Text("The one number. Everything else is worked out backwards from it — when this changes, this is the only thing you edit.")
-                }
-
-                Section("Days") {
-                    WeekdayPicker(weekdays: Binding(
-                        get: { routine.weekdays },
-                        set: { routine.weekdays = $0 }
-                    ))
-                }
-
-                Section {
-                    Stepper("Wake up \(routine.armLeadMinutes) min early",
-                            value: $routine.armLeadMinutes, in: 5...240, step: 5)
-                    Toggle("Enabled", isOn: $routine.isEnabled)
-                } footer: {
-                    Text("How far ahead of your start time this shows up on its own. Counted from when you have to *start*, not from the anchor — an hour before the deadline could already be too late.")
-                }
-
-                Section {
-                    if blocks.isEmpty {
-                        Text("No steps yet. Add what you do before the anchor time, in the order you do it.")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(blocks) { block in
-                            Button {
-                                editingBlock = block
-                            } label: {
-                                StepRow(block: block)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                        .onMove(perform: move)
-                        .onDelete(perform: delete)
+            ScrollView {
+                VStack(alignment: .leading, spacing: InkMetric.section) {
+                    InkCard {
+                        InkTextRow(placeholder: "Name", text: $routine.name,
+                                   autocapitalization: .sentences)
                     }
 
-                    Button {
-                        showingAddStep = true
-                    } label: {
-                        Label("Add Step", systemImage: "plus.circle.fill")
-                    }
-                } header: {
-                    Text("Steps")
-                } footer: {
-                    if let summary = startSummary {
-                        Text(summary)
-                    }
+                    anchorSection
+                    daysSection
+                    sequenceSection
                 }
+                .padding(.horizontal, InkMetric.page)
+                .padding(.top, InkMetric.labelToCard)
+                .padding(.bottom, InkMetric.section)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .navigationTitle(routine.name.isEmpty ? "New Routine" : routine.name)
-            .navigationBarTitleDisplayMode(.inline)
-            .environment(\.editMode, .constant(.active))
+            .scrollIndicators(.hidden)
+            .inkNavigation(title: routine.name.isEmpty ? "NEW ROUTINE" : routine.name.uppercased())
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
-                        .font(.headline)
+                        .inkToolbarButton()
                 }
             }
-            .sheet(isPresented: $showingAddStep) {
-                QuickBlockEditorSheet(
-                    existingBlock: nil,
-                    newBlockOrder: (blocks.map(\.order).max() ?? -1) + 1,
-                    isFirstPosition: blocks.isEmpty,
-                    owningRoutine: routine
-                ) {}
-            }
-            .sheet(item: $editingBlock) { block in
-                QuickBlockEditorSheet(
-                    existingBlock: block,
-                    newBlockOrder: 0,
-                    isFirstPosition: block.order == (blocks.map(\.order).min() ?? block.order),
-                    owningRoutine: routine
-                ) {}
-            }
-            .sheet(isPresented: $showingTimePicker) {
-                FullScreenTimePicker(title: "Be Done By", date: anchorBinding)
+            .sheet(item: $sheet) { route in
+                switch route {
+                case .anchorTime:
+                    FullScreenTimePicker(title: "Be Done By", date: anchorBinding)
+                case .addStep:
+                    QuickBlockEditorSheet(
+                        existingBlock: nil,
+                        newBlockOrder: (blocks.map(\.order).max() ?? -1) + 1,
+                        isFirstPosition: blocks.isEmpty,
+                        owningRoutine: routine,
+                        allowsOpenDuration: !blocks.contains { $0.kind.isOpenDuration }
+                    ) {}
+                case .editStep(let block):
+                    QuickBlockEditorSheet(
+                        existingBlock: block,
+                        newBlockOrder: 0,
+                        isFirstPosition: block.order == (blocks.map(\.order).min() ?? block.order),
+                        owningRoutine: routine,
+                        allowsOpenDuration: !blocks.contains {
+                            $0.kind.isOpenDuration && $0.persistentModelID != block.persistentModelID
+                        }
+                    ) {}
+                }
             }
         }
+    }
+
+    // MARK: - Sections
+
+    /// The one number. Same weight and place the composer gives Final Time,
+    /// but in plain white: the composer's number is the only spectrum
+    /// element in the product.
+    private var anchorSection: some View {
+        VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
+            SectionLabel("BE DONE BY")
+
+            Button {
+                sheet = .anchorTime
+            } label: {
+                Text(timeString(hour: routine.anchorHour, minute: routine.anchorMinute))
+                    .font(InkType.display)
+                    .monospacedDigit()
+                    .foregroundStyle(OnTimeSpectrum.primaryText)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 18)
+                    .spectrumCard()
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var daysSection: some View {
+        VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
+            SectionLabel("DAYS")
+
+            WeekdayChips(weekdays: Binding(
+                get: { routine.weekdays },
+                set: { routine.weekdays = $0 }
+            ))
+
+            InkCard {
+                InkStepperRow(title: "Wakes up", value: $routine.armLeadMinutes,
+                              range: 5...240, step: 5, unit: "min")
+                InkToggleRow(title: "Enabled", isOn: $routine.isEnabled)
+            }
+        }
+    }
+
+    private var sequenceSection: some View {
+        VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
+            SectionLabel(text: "THE SEQUENCE") {
+                HStack(spacing: 14) {
+                    if blocks.count > 1 {
+                        // Dragging a whole routine end to end, one row at a
+                        // time, to fix having typed it in backwards is the
+                        // kind of work a button should do.
+                        Button {
+                            reverseSteps()
+                        } label: {
+                            Label("Reverse", systemImage: "arrow.up.arrow.down")
+                                .font(InkType.label)
+                                .labelStyle(.titleAndIcon)
+                                .foregroundStyle(OnTimeSpectrum.primaryText)
+                        }
+                    }
+                    PlusButton { sheet = .addStep }
+                }
+            }
+
+            if blocks.isEmpty {
+                InkEmpty("No steps.")
+            } else {
+                VStack(spacing: InkMetric.cardToCard) {
+                    ForEach(Array(blocks.enumerated()), id: \.element.uuid) { index, block in
+                        Button {
+                            sheet = .editStep(block)
+                        } label: {
+                            stepRow(block, index: index)
+                        }
+                        .buttonStyle(.plain)
+                        // Reordering by context menu rather than by a
+                        // permanent drag grip: `editMode` kept every row in
+                        // edit affordances even when nothing was being moved.
+                        .contextMenu {
+                            Button("Move Up") { move(index, by: -1) }
+                                .disabled(index == 0)
+                            Button("Move Down") { move(index, by: 1) }
+                                .disabled(index == blocks.count - 1)
+                            Button("Delete", role: .destructive) { delete(block) }
+                        }
+                    }
+
+                    if let summary = startSummary {
+                        InkCard {
+                            InkTextLine(text: summary)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func stepRow(_ block: Block, index: Int) -> some View {
+        StepRowCard(
+            symbol: block.template?.symbol ?? block.kind.defaultSymbol,
+            name: block.name,
+            meta: metaLine(for: block, index: index),
+            onDelete: { delete(block) }
+        ) {
+            if block.kind == .flex {
+                badge("FLEX")
+            } else if block.kind == .walk {
+                badge("WALK")
+            } else {
+                StepRowValue(text: "\(TravelTimeService.shared.manualEstimateMinutes(for: block)) min")
+            }
+        }
+    }
+
+    private func metaLine(for block: Block, index: Int) -> [String] {
+        var parts = ["STEP \(index + 1)"]
+        if block.kind == .drive, let dest = block.destinationPlace {
+            parts.append("to \(dest.name)")
+        }
+        return parts
+    }
+
+    private func badge(_ text: String) -> some View {
+        Text(text)
+            .font(InkType.label)
+            .tracking(1.5)
+            .foregroundStyle(OnTimeSpectrum.tertiaryText)
     }
 
     /// Shown under the step list so the consequence of the durations above is
@@ -127,7 +221,7 @@ struct ScheduledRoutineEditor: View {
     private var startSummary: String? {
         guard let occurrence = ScheduleService.nextOccurrence(for: routine) else { return nil }
         guard !blocks.isEmpty else { return nil }
-        return "You'd need to start at \(timeString(occurrence.mustStartAt)), and this would wake up at \(timeString(occurrence.armAt))."
+        return "Start by \(timeString(occurrence.mustStartAt)) · Wakes up \(timeString(occurrence.armAt))"
     }
 
     private var anchorBinding: Binding<Date> {
@@ -146,98 +240,47 @@ struct ScheduledRoutineEditor: View {
         )
     }
 
-    private func move(from source: IndexSet, to destination: Int) {
+    /// Moves one step one place. A Starts At step only means something as
+    /// step 1: its duration is "time until the clock says X", which is
+    /// meaningless behind other steps. So any startAt stays pinned to the
+    /// front however the rest is shuffled.
+    private func move(_ index: Int, by offset: Int) {
         var reordered = blocks
-        reordered.move(fromOffsets: source, toOffset: destination)
-        for (index, block) in reordered.enumerated() {
-            block.order = index
+        let target = index + offset
+        guard reordered.indices.contains(index), reordered.indices.contains(target) else { return }
+        reordered.swapAt(index, target)
+        let startAts = reordered.filter { $0.kind == .startAt }
+        let rest = reordered.filter { $0.kind != .startAt }
+        withAnimation {
+            for (i, block) in (startAts + rest).enumerated() {
+                block.order = i
+            }
         }
     }
 
-    private func delete(at offsets: IndexSet) {
-        for index in offsets {
-            modelContext.delete(blocks[index])
+    /// Flips the whole sequence end to end. Goes through the same startAt
+    /// pinning rule as `move`.
+    private func reverseSteps() {
+        let reversed = Array(blocks.reversed())
+        let startAts = reversed.filter { $0.kind == .startAt }
+        let rest = reversed.filter { $0.kind != .startAt }
+        withAnimation {
+            for (index, block) in (startAts + rest).enumerated() {
+                block.order = index
+            }
         }
+    }
+
+    private func delete(_ block: Block) {
+        modelContext.delete(block)
         routine.renumber()
     }
 
     private func timeString(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.dateFormat = "h:mm a"
-        return f.string(from: date)
+        TimeFormatting.clockString(date)
     }
 
     private func timeString(hour: Int, minute: Int) -> String {
-        var comps = DateComponents()
-        comps.hour = hour
-        comps.minute = minute
-        let date = Calendar.current.date(from: comps) ?? Date()
-        return timeString(date)
-    }
-}
-
-private struct StepRow: View {
-    let block: Block
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: block.template?.symbol ?? block.kind.defaultSymbol)
-                .foregroundStyle(.tint)
-                .frame(width: 22)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(block.name)
-                    .foregroundStyle(.primary)
-                if block.kind == .drive, let dest = block.destinationPlace {
-                    Text("to \(dest.name)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            Spacer()
-            if block.kind == .flex {
-                Text("FLEX")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.orange)
-            } else {
-                Text("\(TravelTimeService.shared.manualEstimateMinutes(for: block)) min")
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-}
-
-private struct WeekdayPicker: View {
-    @Binding var weekdays: Set<Int>
-
-    private var symbols: [String] { Calendar.current.veryShortWeekdaySymbols }
-
-    var body: some View {
-        HStack(spacing: 6) {
-            ForEach(1...7, id: \.self) { day in
-                let on = weekdays.contains(day)
-                Button {
-                    // Never let the set empty out — a routine with no days
-                    // has no next occurrence, so it would silently vanish
-                    // from the schedule with nothing on screen explaining
-                    // why.
-                    if on, weekdays.count > 1 {
-                        weekdays.remove(day)
-                    } else if !on {
-                        weekdays.insert(day)
-                    }
-                } label: {
-                    Text(symbols.indices.contains(day - 1) ? symbols[day - 1] : "?")
-                        .font(.caption.weight(.bold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
-                        .background(on ? Color.accentColor : Color.secondary.opacity(0.15))
-                        .foregroundStyle(on ? .white : .primary)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(.vertical, 2)
+        TimeFormatting.clockString(hour: hour, minute: minute)
     }
 }

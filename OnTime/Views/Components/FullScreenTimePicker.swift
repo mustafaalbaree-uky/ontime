@@ -28,12 +28,21 @@ struct FullScreenTimePicker: View {
     @State private var typedText = ""
     @FocusState private var typedFieldFocused: Bool
 
+    /// The value being edited, committed to the caller's binding only on
+    /// Done. The wheel used to write through the live binding on every
+    /// detent, so "Cancel" (and swiping the sheet down) left the deadline
+    /// or a routine's anchor already changed — Cancel didn't cancel.
+    @State private var workingDate: Date
+    @State private var workingMinutes: Int
+
     init(title: String, date: Binding<Date>, onDone: (() -> Void)? = nil) {
         self.title = title
         self.mode = .time
         self._date = date
         self._minutes = .constant(0)
         self.onDone = onDone
+        self._workingDate = State(initialValue: date.wrappedValue)
+        self._workingMinutes = State(initialValue: 0)
     }
 
     init(title: String, minutes: Binding<Int>, onDone: (() -> Void)? = nil) {
@@ -42,6 +51,8 @@ struct FullScreenTimePicker: View {
         self._date = .constant(Date())
         self._minutes = minutes
         self.onDone = onDone
+        self._workingDate = State(initialValue: Date())
+        self._workingMinutes = State(initialValue: minutes.wrappedValue)
     }
 
     var body: some View {
@@ -59,26 +70,32 @@ struct FullScreenTimePicker: View {
                 Spacer()
             }
             .padding()
-            .navigationTitle(title)
-            .navigationBarTitleDisplayMode(.inline)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .inkNavigation(title: title.uppercased())
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .inkToolbarButton()
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         beginTyping()
                     } label: {
                         Image(systemName: isTyping ? "dial.min" : "keyboard")
+                            .foregroundStyle(OnTimeSpectrum.primaryText)
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") {
                         commitTypedIfNeeded()
+                        switch mode {
+                        case .time: date = workingDate
+                        case .duration: minutes = workingMinutes
+                        }
                         onDone?()
                         dismiss()
                     }
-                    .font(.headline)
+                    .inkToolbarButton()
                 }
             }
         }
@@ -90,9 +107,15 @@ struct FullScreenTimePicker: View {
         Text(mode == .time ? timeString : durationString)
             .font(.system(size: 64, weight: .heavy, design: .rounded))
             .monospacedDigit()
-            .foregroundStyle(Color.accentColor)
+            // Explicitly white, not `Color.accentColor`. The accent *asset*
+            // and the environment `.tint` are two different values, and this
+            // view is presented as a sheet — so the number rendered in the
+            // asset's blue while the toolbar beside it rendered in the tint,
+            // and the two resolved a frame apart, which looked like the digits
+            // starting white and then turning blue on their own.
+            .foregroundStyle(OnTimeSpectrum.primaryText)
             .contentTransition(.numericText())
-            .animation(.default, value: mode == .time ? date : Date(timeIntervalSince1970: TimeInterval(minutes)))
+            .animation(.default, value: mode == .time ? workingDate : Date(timeIntervalSince1970: TimeInterval(workingMinutes)))
             .padding(.bottom, 24)
     }
 
@@ -103,9 +126,10 @@ struct FullScreenTimePicker: View {
         switch mode {
         case .time:
             VStack(spacing: 16) {
-                DatePicker("", selection: $date, displayedComponents: .hourAndMinute)
+                DatePicker("", selection: $workingDate, displayedComponents: .hourAndMinute)
                     .datePickerStyle(.wheel)
                     .labelsHidden()
+                    .colorScheme(.dark)
 
                 // Same drag-to-scrub feel as the duration picker's "+" flow
                 // (`DurationScrubber`), for nudging the time a few minutes
@@ -121,25 +145,25 @@ struct FullScreenTimePicker: View {
                 .padding(.horizontal)
             }
         case .duration:
-            DurationScrubber(minutes: $minutes, range: 1...600)
+            DurationScrubber(minutes: $workingMinutes, range: 1...600)
                 .padding(.horizontal)
         }
     }
 
-    /// `date` reduced to minutes since midnight, for the scrub track above —
-    /// which only knows how to scrub a bare `Int`, not a `Date`.
+    /// `workingDate` reduced to minutes since midnight, for the scrub track
+    /// above — which only knows how to scrub a bare `Int`, not a `Date`.
     private var minutesSinceMidnightBinding: Binding<Int> {
         Binding(
             get: {
-                let comps = Calendar.current.dateComponents([.hour, .minute], from: date)
+                let comps = Calendar.current.dateComponents([.hour, .minute], from: workingDate)
                 return (comps.hour ?? 0) * 60 + (comps.minute ?? 0)
             },
             set: { newValue in
                 let clamped = newValue.clamped(to: 0...1439)
-                var comps = Calendar.current.dateComponents([.year, .month, .day], from: date)
+                var comps = Calendar.current.dateComponents([.year, .month, .day], from: workingDate)
                 comps.hour = clamped / 60
                 comps.minute = clamped % 60
-                date = Calendar.current.date(from: comps) ?? date
+                workingDate = Calendar.current.date(from: comps) ?? workingDate
             }
         )
     }
@@ -147,24 +171,25 @@ struct FullScreenTimePicker: View {
     // MARK: - Typed entry
 
     private var typedEntry: some View {
-        VStack(spacing: 16) {
-            TextField(mode == .time ? "h:mm am/pm" : "minutes", text: $typedText)
-                .font(.system(size: 48, weight: .bold, design: .rounded))
-                .multilineTextAlignment(.center)
-                .keyboardType(mode == .time ? .default : .numberPad)
-                .focused($typedFieldFocused)
-                .textFieldStyle(.plain)
-                .padding()
-                .background(Color.secondary.opacity(0.1))
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-
-            Text(mode == .time ? "e.g. 2:47 PM" : "e.g. 25")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
+        TextField("", text: $typedText, prompt: Text(mode == .time ? "h:mm am/pm" : "minutes")
+            .foregroundColor(OnTimeSpectrum.tertiaryText))
+            .font(.system(size: 48, weight: .bold, design: .rounded))
+            .foregroundStyle(OnTimeSpectrum.primaryText)
+            .tint(OnTimeSpectrum.primaryText)
+            .multilineTextAlignment(.center)
+            .keyboardType(mode == .time ? .default : .numberPad)
+            .focused($typedFieldFocused)
+            .textFieldStyle(.plain)
+            .padding()
+            .background(OnTimeSpectrum.surface)
+            .clipShape(RoundedRectangle(cornerRadius: InkMetric.innerRadius, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: InkMetric.innerRadius, style: .continuous)
+                    .strokeBorder(OnTimeSpectrum.hairline, lineWidth: 1)
+            }
         .padding(.horizontal, 32)
         .onAppear {
-            typedText = mode == .time ? timeString : "\(minutes)"
+            typedText = mode == .time ? timeString : "\(workingMinutes)"
             typedFieldFocused = true
         }
     }
@@ -182,13 +207,11 @@ struct FullScreenTimePicker: View {
     /// opens.
     private func beginTyping(prefilledMinutesSinceMidnight minutes: Int) {
         let clamped = minutes.clamped(to: 0...1439)
-        var comps = Calendar.current.dateComponents([.year, .month, .day], from: date)
+        var comps = Calendar.current.dateComponents([.year, .month, .day], from: workingDate)
         comps.hour = clamped / 60
         comps.minute = clamped % 60
         if let target = Calendar.current.date(from: comps) {
-            let f = DateFormatter()
-            f.dateFormat = "h:mm a"
-            typedText = f.string(from: target)
+            typedText = TimeFormatting.clockString(target)
         }
         isTyping = true
     }
@@ -198,11 +221,11 @@ struct FullScreenTimePicker: View {
         switch mode {
         case .time:
             if let parsed = Self.parseTime(typedText) {
-                date = parsed
+                workingDate = parsed
             }
         case .duration:
             if let value = Int(typedText.trimmingCharacters(in: .whitespaces)), value > 0 {
-                minutes = min(value, 600)
+                workingMinutes = min(value, 600)
             }
         }
     }
@@ -210,24 +233,26 @@ struct FullScreenTimePicker: View {
     // MARK: - Formatting
 
     private var timeString: String {
-        let f = DateFormatter()
-        f.dateFormat = "h:mm a"
-        return f.string(from: date)
+        TimeFormatting.clockString(workingDate)
     }
 
     private var durationString: String {
-        "\(minutes) min"
+        "\(workingMinutes) min"
     }
 
-    /// Accepts "2:47 PM", "2:47pm", "14:47", "247pm" — loose enough that
-    /// typing fast on a phone keyboard still lands.
-    private static func parseTime(_ text: String) -> Date? {
+    /// Accepts "2:47 PM", "2:47pm", "14:47", "2 pm" — loose enough that
+    /// typing fast on a phone keyboard still lands. Parsed against a fixed
+    /// POSIX locale: the device locale's formatter can reject "PM" outright
+    /// (24 hour locales) and the failure was silent, the typed entry just
+    /// ignored. Internal, not private, so the format list is testable.
+    static func parseTime(_ text: String) -> Date? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
         let formats = ["h:mm a", "h:mma", "HH:mm", "h a", "ha"]
         for format in formats {
             let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX")
             f.dateFormat = format
             if let parsedTime = f.date(from: trimmed) {
                 var comps = Calendar.current.dateComponents([.year, .month, .day], from: Date())

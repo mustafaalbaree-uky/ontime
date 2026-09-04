@@ -1,18 +1,23 @@
 import Foundation
 import SwiftData
 
-/// One `RunEngine` per open `Run`, keyed by the run's own persistent
-/// identity. Whatever view is currently showing a `Run` just asks this
-/// store for its engine instead of owning the tick/business logic itself —
-/// that's what lets a run keep going after its screen is dismissed, and
-/// lets more than one run be live at once for the Current Countdowns tab.
+/// One `RunEngine` per open `Run`, keyed by the run's persisted `uuid`.
+/// Whatever view is currently showing a `Run` just asks this store for its
+/// engine instead of owning the tick/business logic itself — that's what
+/// lets a run keep going after its screen is dismissed, and lets more than
+/// one run be live at once for the Current Countdowns tab.
+///
+/// Keyed on `Run.uuid` rather than `persistentModelID` because a persistent
+/// identifier is temporary until the first save: the temporary-to-permanent
+/// transition after autosave made the same run miss its own engine lookup
+/// and mint a second engine (two 1s timers driving the same rows).
 @MainActor
 @Observable
 final class RunEngineStore {
     static let shared = RunEngineStore()
 
     private var modelContext: ModelContext?
-    private(set) var engines: [PersistentIdentifier: RunEngine] = [:]
+    private(set) var engines: [UUID: RunEngine] = [:]
 
     private init() {
         // The Live Activity's "Complete Step" button and a notification's
@@ -21,9 +26,11 @@ final class RunEngineStore {
         // once a run keeps going after its screen is dismissed, is usually
         // not even mounted. Listening here instead means the tap works
         // regardless of what's on screen, routed to the right run by the
-        // `planId` both callers now attach.
+        // `planId` both callers now attach. (`OnTimeApp.init` touches this
+        // singleton synchronously at launch so the observer exists before
+        // the launch sequence can deliver anything.)
         NotificationCenter.default.addObserver(
-            forName: NSNotification.Name("OnTimeAdvanceStepFromIntent"),
+            forName: OnTimeShared.advanceStepNotification,
             object: nil,
             queue: .main
         ) { [weak self] note in
@@ -35,7 +42,26 @@ final class RunEngineStore {
     }
 
     private func advanceRun(planId: String) {
-        guard let engine = engines.values.first(where: { $0.plan.map { "\($0.id)" } == planId }) else { return }
+        // The tap is being handled live; the persisted copy the intent
+        // wrote for the dead-app case is now redundant.
+        UserDefaults.standard.removeObject(forKey: OnTimeShared.pendingAdvanceKey)
+        guard let engine = engines.values.first(where: { $0.plan?.uuid.uuidString == planId }) else { return }
+        engine.advanceStep()
+    }
+
+    /// Consumes a "Complete Step" tap that arrived while no observer was
+    /// alive — a `LiveActivityIntent` launching the app in the background
+    /// posts to nobody, but it also persists the tap (see
+    /// `CompleteStepIntent.perform`). Called from `RootView.resumeOpenRuns`
+    /// once every open run's engine is back up.
+    func consumePendingAdvance() {
+        let defaults = UserDefaults.standard
+        guard let record = defaults.dictionary(forKey: OnTimeShared.pendingAdvanceKey),
+              let planId = record["planId"] as? String,
+              let at = record["at"] as? TimeInterval else { return }
+        defaults.removeObject(forKey: OnTimeShared.pendingAdvanceKey)
+        guard Date().timeIntervalSince1970 - at <= OnTimeShared.pendingAdvanceMaxAge else { return }
+        guard let engine = engines.values.first(where: { $0.plan?.uuid.uuidString == planId }) else { return }
         engine.advanceStep()
     }
 
@@ -53,24 +79,21 @@ final class RunEngineStore {
     /// call repeatedly — e.g. every time `RunView` appears for the same run.
     @discardableResult
     func engine(for run: Run) -> RunEngine {
-        if let existing = engines[run.persistentModelID] {
+        if let existing = engines[run.uuid] {
             existing.resume()
             return existing
         }
-        // `RootView.resumeOpenRuns` configures this at launch before
-        // anything else can call in, but a shipping crash on that ordering
-        // if it's ever wrong is worse than just falling back to the
-        // context `run` itself already belongs to — it was inserted into
-        // one before any engine could be requested for it, at every call
-        // site (`RunLauncher`).
+        // `OnTimeApp.init` configures this before any view exists; the
+        // run's own context covers a run inserted elsewhere. If *neither*
+        // exists the run was never inserted at all — the old fallback built
+        // a second ModelContainer on the default store URL, which either
+        // crashed on `try!` or silently split writes into a store nothing
+        // else reads. Failing loudly is strictly better than either.
         guard let ctx = modelContext ?? run.modelContext else {
-            assertionFailure("RunEngineStore has no ModelContext to use — run was never inserted")
-            let engine = RunEngine(run: run, modelContext: ModelContext(try! ModelContainer(for: Schema(Schema0.models))))
-            engines[run.persistentModelID] = engine
-            return engine
+            fatalError("RunEngineStore.engine(for:) called before configure with an un-inserted Run")
         }
         let engine = RunEngine(run: run, modelContext: ctx)
-        engines[run.persistentModelID] = engine
+        engines[run.uuid] = engine
         return engine
     }
 
@@ -79,21 +102,34 @@ final class RunEngineStore {
     /// a view just being dismissed, which leaves the engine registered and
     /// running.
     func cancel(_ run: Run) {
-        let engine = engines[run.persistentModelID] ?? engine(for: run)
-        engine.cancel()
-        if let p = engine.plan {
-            Notifications.shared.cancelRunNotifications(planId: "\(p.id)")
+        if let engine = engines[run.uuid] {
+            engine.cancel()
+            engines.removeValue(forKey: run.uuid)
+        } else {
+            // No engine registered: tear down directly. Building a full
+            // engine just to cancel it ran `resume()` first, whose enqueued
+            // Live Activity start could race this cancellation's end and
+            // leave a fresh activity for a dead run.
+            run.finishedAt = Date()
+            if let p = run.plan {
+                Task { await LiveActivityManager.end(planId: p.uuid.uuidString) }
+            }
         }
-        engines.removeValue(forKey: run.persistentModelID)
+        if let p = run.plan {
+            Notifications.shared.cancelRunNotifications(planId: p.uuid.uuidString)
+        }
+        WidgetBridge.shared.setNeedsRefresh()
     }
 
     /// Drops an engine once its run has finished normally (reached the last
-    /// step) — the engine already stopped its own ticking via
-    /// `syncLiveActivityAndNotifications`'s `isFinished` branch; this just
-    /// stops the store from holding a reference to it.
+    /// step). The engine calls this on itself from
+    /// `syncLiveActivityAndNotifications`'s `isFinished` branch, so an
+    /// unattended completion no longer waits for a `RunView` to appear;
+    /// `RunView`'s finished screen also calls it, idempotently.
     func retire(_ run: Run) {
-        engines[run.persistentModelID]?.stopTicking()
-        engines.removeValue(forKey: run.persistentModelID)
+        engines[run.uuid]?.stopTicking()
+        engines.removeValue(forKey: run.uuid)
+        WidgetBridge.shared.setNeedsRefresh()
     }
 
     var openEngines: [RunEngine] {

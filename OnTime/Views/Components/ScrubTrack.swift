@@ -26,14 +26,15 @@ struct ScrubTrack: View {
     var body: some View {
         ZStack {
             Capsule()
-                .fill(isDragging ? Color.accentColor.opacity(0.22) : Color.secondary.opacity(0.15))
+                .fill(isDragging ? OnTimeSpectrum.surfaceRaised : OnTimeSpectrum.surface)
+                .overlay(Capsule().strokeBorder(OnTimeSpectrum.hairline, lineWidth: 1))
             HStack {
                 Image(systemName: "chevron.left")
                 Spacer()
                 Image(systemName: "chevron.right")
             }
             .font(.caption.weight(.bold))
-            .foregroundStyle(.secondary.opacity(isDragging ? 0.4 : 0.7))
+            .foregroundStyle(isDragging ? OnTimeSpectrum.secondaryText : OnTimeSpectrum.tertiaryText)
             .padding(.horizontal, 14)
         }
         .frame(height: 40)

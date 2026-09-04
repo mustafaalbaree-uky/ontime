@@ -22,7 +22,9 @@ struct DurationScrubber: View {
     var body: some View {
         HStack(spacing: 10) {
             Text("\(minutes) min")
-                .font(.title3.weight(.bold).monospacedDigit())
+                .font(InkType.value)
+                .monospacedDigit()
+                .foregroundStyle(OnTimeSpectrum.primaryText)
                 .frame(minWidth: 64, alignment: .leading)
                 .contentTransition(.numericText())
                 .animation(.default, value: minutes)
@@ -43,12 +45,12 @@ struct DurationScrubber: View {
             } label: {
                 Image(systemName: "keyboard")
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(OnTimeSpectrum.tertiaryText)
                     .frame(width: 32, height: 32)
             }
             .buttonStyle(.plain)
         }
-        .alert("Set Minutes", isPresented: $showingTypePrompt) {
+        .alert("Minutes", isPresented: $showingTypePrompt) {
             TextField("Minutes", text: $typedText)
                 .keyboardType(.numberPad)
             Button("Set") {

@@ -55,6 +55,8 @@ struct PlanTests {
             useManualEstimateOnly: true
         )
 
+        source.resolvedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
         let copy = source.copyForSpawn(order: 0)
 
         #expect(copy.order == 0)
@@ -63,6 +65,7 @@ struct PlanTests {
         #expect(copy.template === template)
         #expect(copy.estimateOverrideMinutes == 9)
         #expect(copy.resolvedMinutes == 11)
+        #expect(copy.resolvedAt == source.resolvedAt)
         #expect(copy.originPlace === origin)
         #expect(copy.destinationPlace === destination)
         // The four that used to be dropped.
@@ -70,6 +73,105 @@ struct PlanTests {
         #expect(copy.targetMinute == 45)
         #expect(copy.isOpenEnded == false)
         #expect(copy.useManualEstimateOnly == true)
+        // Identity is per-row, never copied.
+        #expect(copy.uuid != source.uuid)
+    }
+
+    /// The mechanical tripwire the hand-written test above cannot be: it
+    /// asserts only the fields it already names, so the exact recurring bug
+    /// it exists to catch (a new `Block` field missing from `copyForSpawn`)
+    /// sailed past it — the developer who forgets the copy also never adds
+    /// the assertion. This walks the *schema's* property list for Block and
+    /// fails on any field that is in neither the copied list nor the
+    /// deliberate-exclusion list, forcing an explicit decision.
+    @Test func copyForSpawnAccountsForEveryPersistedBlockField() throws {
+        let schema = Schema(Schema0.models)
+        let entity = try #require(schema.entities.first { $0.name == "Block" })
+        let persisted = Set(entity.attributes.map(\.name))
+            .union(entity.relationships.map(\.name))
+
+        let copied: Set<String> = [
+            "order", "name", "kindRaw", "template", "estimateOverrideMinutes",
+            "resolvedMinutes", "resolvedAt", "originPlace", "destinationPlace",
+            "targetHour", "targetMinute", "isOpenEnded", "useManualEstimateOnly",
+        ]
+        // Run state belongs to the run that recorded it; ownership belongs
+        // to the spawner; identity is per-row.
+        let deliberatelyExcluded: Set<String> = [
+            "uuid", "actualStart", "actualEnd", "statusRaw", "plan", "routine",
+        ]
+
+        let unaccounted = persisted.subtracting(copied).subtracting(deliberatelyExcluded)
+        #expect(unaccounted.isEmpty,
+                "New Block field(s) \(unaccounted.sorted()) must be added to copyForSpawn and this test's copied list, or explicitly excluded")
+    }
+
+    /// One row of every model type through a real container over
+    /// `Schema0.models`. This is the only automated way to catch the silent
+    /// failure the Schema0 comment warns about: a model added to the code
+    /// but not to that list has no table, and every fetch of it returns
+    /// empty with no error anywhere.
+    @Test func schema0RoundTripsEveryModelType() throws {
+        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let container = try ModelContainer(for: Schema(Schema0.models), configurations: config)
+        let context = ModelContext(container)
+
+        let template = TaskTemplate(name: "T")
+        context.insert(template)
+        context.insert(DurationSample(minutes: 5, template: template))
+        context.insert(Place(name: "P"))
+        let plan = Plan(name: "Plan", deadline: Date())
+        context.insert(plan)
+        let block = Block(order: 0, name: "B")
+        block.plan = plan
+        context.insert(block)
+        context.insert(Run(plan: plan))
+        context.insert(ScheduledRoutine(name: "R", anchorHour: 7, anchorMinute: 0))
+        context.insert(QuickShortcut(name: "Q", hour: 9, minute: 0))
+        try context.save()
+
+        #expect(try context.fetch(FetchDescriptor<TaskTemplate>()).count == 1)
+        #expect(try context.fetch(FetchDescriptor<DurationSample>()).count == 1)
+        #expect(try context.fetch(FetchDescriptor<Place>()).count == 1)
+        #expect(try context.fetch(FetchDescriptor<Plan>()).count == 1)
+        #expect(try context.fetch(FetchDescriptor<Block>()).count == 1)
+        #expect(try context.fetch(FetchDescriptor<Run>()).count == 1)
+        #expect(try context.fetch(FetchDescriptor<ScheduledRoutine>()).count == 1)
+        #expect(try context.fetch(FetchDescriptor<QuickShortcut>()).count == 1)
+    }
+
+    /// The dangling-pointer cleanup: deleting a template, place, or routine
+    /// through `DeleteCleanup` nils every unpaired referrer first, so no
+    /// later property read faults on a deleted row.
+    @MainActor
+    @Test func deleteCleanupNilsUnpairedReferrers() throws {
+        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let container = try ModelContainer(for: Schema(Schema0.models), configurations: config)
+        let context = ModelContext(container)
+
+        let template = TaskTemplate(name: "Shower")
+        let place = Place(name: "Masjid", latitude: 38, longitude: -84)
+        let routine = ScheduledRoutine(name: "Evening", anchorHour: 19, anchorMinute: 30)
+        context.insert(template)
+        context.insert(place)
+        context.insert(routine)
+
+        let block = Block(order: 0, name: "Step", kind: .drive, template: template, destinationPlace: place)
+        context.insert(block)
+        let plan = Plan(name: "P", deadline: Date(), routine: routine)
+        context.insert(plan)
+        try context.save()
+
+        DeleteCleanup.delete(template, in: context)
+        DeleteCleanup.delete(place, in: context)
+        DeleteCleanup.delete(routine, in: context)
+        try context.save()
+
+        #expect(block.template == nil)
+        #expect(block.destinationPlace == nil)
+        #expect(plan.routine == nil)
+        #expect(try context.fetch(FetchDescriptor<TaskTemplate>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<ScheduledRoutine>()).isEmpty)
     }
 
     /// Run state belongs to the run that recorded it, never to a fresh copy.

@@ -102,6 +102,80 @@ struct ScheduleServiceTests {
         #expect(tomorrow?.deadline == date(2026, 8, 21, 20, 0))
     }
 
+    /// Regression: the alarm scheduler asks for the next occurrence whose
+    /// *arm moment* is still ahead, not just the next occurrence. Asking for
+    /// the plain next one meant that between arming and the deadline there
+    /// was no future arm time to schedule, so `refreshArmAlarms` (which runs
+    /// immediately after `armDueRoutines`) erased the routine's own next
+    /// alarm the moment it fired, and a daily routine could notify exactly
+    /// once ever.
+    @Test func futureArmSkipsAnOccurrenceWhoseWindowAlreadyOpened() {
+        let r = routine(anchorHour: 20, anchorMinute: 0, stepMinutes: [30], armLead: 60)
+
+        // 19:00 — armed at 18:30, deadline 20:00 not yet reached.
+        let now = date(2026, 8, 20, 19, 0)
+
+        let plain = ScheduleService.nextOccurrence(for: r, now: now, calendar: calendar)
+        #expect(plain?.deadline == date(2026, 8, 20, 20, 0))
+        #expect(plain?.armAt == date(2026, 8, 20, 18, 30))
+
+        let forAlarms = ScheduleService.nextOccurrence(for: r, now: now, calendar: calendar,
+                                                      requiringFutureArm: true)
+        #expect(forAlarms?.deadline == date(2026, 8, 21, 20, 0))
+        #expect(forAlarms?.armAt == date(2026, 8, 21, 18, 30))
+    }
+
+    @Test func futureArmKeepsTodaysOccurrenceBeforeTheWindowOpens() {
+        let r = routine(anchorHour: 20, anchorMinute: 0, stepMinutes: [30], armLead: 60)
+        let occurrence = ScheduleService.nextOccurrence(for: r, now: date(2026, 8, 20, 12, 0),
+                                                       calendar: calendar,
+                                                       requiringFutureArm: true)
+        #expect(occurrence?.armAt == date(2026, 8, 20, 18, 30))
+    }
+
+    // MARK: - The arm alerts
+
+    /// Two alerts per occurrence and no more: the window opening, and the
+    /// moment you have to go.
+    ///
+    /// This used to be a chain — one every ten minutes across the whole
+    /// window, capped at seven — on the theory that iOS won't pin a banner
+    /// so persistence had to be built out of repetition. Seven
+    /// time-sensitive sounding interruptions saying near-identical sentences
+    /// about a number already on the Lock Screen is not persistence, and it
+    /// was the single loudest thing the app did.
+    @Test func armAlertsAreTheWindowOpeningAndTheGoMoment() {
+        let armAt = date(2026, 8, 20, 18, 30)
+        let start = date(2026, 8, 20, 19, 30)
+        #expect(Notifications.armAlertTimes(from: armAt, to: start) == [armAt, start])
+    }
+
+    /// A four-hour lead is allowed by the editor, and it still produces
+    /// exactly two requests, so nothing here can crowd a running plan's step
+    /// notifications out of the 64-request pending limit.
+    @Test func aLongLeadStillProducesTwoAlerts() {
+        let armAt = date(2026, 8, 20, 16, 0)
+        let start = date(2026, 8, 20, 20, 0)
+        #expect(Notifications.armAlertTimes(from: armAt, to: start) == [armAt, start])
+    }
+
+    /// A zero-duration window (no steps, so start == deadline == arm) must
+    /// produce one alert, not two identical ones.
+    @Test func armAlertsDoNotDuplicateAZeroLengthWindow() {
+        let t = date(2026, 8, 20, 18, 30)
+        #expect(Notifications.armAlertTimes(from: t, to: t) == [t])
+    }
+
+    /// A short window collapses to the go alert alone. Two banners a few
+    /// minutes apart, reading "starts in 3 min" and then "start now", is the
+    /// repetition the chain was cut to stop, and the second is the one worth
+    /// keeping.
+    @Test func aShortWindowKeepsOnlyTheGoAlert() {
+        let armAt = date(2026, 8, 20, 12, 0)
+        let start = date(2026, 8, 20, 12, 3)
+        #expect(Notifications.armAlertTimes(from: armAt, to: start) == [start])
+    }
+
     @Test func skipsToNextEligibleWeekday() {
         // Fridays only (Calendar weekday 6), asked on Saturday 2026-08-22.
         let r = routine(anchorHour: 20, anchorMinute: 0, stepMinutes: [30], weekdays: [6])
@@ -159,5 +233,79 @@ struct ScheduleServiceTests {
 
         r.weekdays = Set(1...7)
         #expect(r.runsEveryDay)
+    }
+
+    /// A routine with an open duration step still gets a real must-start
+    /// time: the latest possible start (zero flex), not the deadline
+    /// itself. The deadline fallback armed such routines with no lead over
+    /// their fixed steps at all.
+    @Test func openDurationRoutineDerivesMustStartFromKnownSteps() {
+        let r = routine(anchorHour: 20, anchorMinute: 0, stepMinutes: [30])
+        let flex = Block(order: 1, name: "Walk", kind: .walk)
+        flex.routine = r
+        r.blocks.append(flex)
+        r.renumber()
+
+        let occurrence = ScheduleService.nextOccurrence(for: r, now: date(2026, 8, 20, 12, 0), calendar: calendar)
+
+        // 30 minutes of known steps, zero for the walk: start 19:30.
+        #expect(occurrence?.mustStartAt == date(2026, 8, 20, 19, 30))
+    }
+
+    // MARK: - Arming (materialization), against a real in-memory store
+
+    private func inMemoryContext() throws -> ModelContext {
+        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let container = try ModelContainer(for: Schema(Schema0.models), configurations: config)
+        return ModelContext(container)
+    }
+
+    /// The midnight straddle: a routine anchored at 00:30 with a window
+    /// opening at 22:50 the previous evening must arm exactly once for that
+    /// occurrence, whichever side of midnight the app is foregrounded on.
+    /// Keying idempotence on "the day arming happened" armed it twice.
+    @Test func midnightStraddlingWindowArmsExactlyOnce() throws {
+        let context = try inMemoryContext()
+        let r = routine(anchorHour: 0, anchorMinute: 30, stepMinutes: [40], armLead: 60)
+        context.insert(r)
+
+        // 23:00: window (22:50) is open for tomorrow's 00:30 deadline.
+        let eveningRuns = ScheduleService.armDueRoutines(in: context, now: date(2026, 8, 20, 23, 0), calendar: calendar)
+        #expect(eveningRuns.count == 1)
+        // Born backdated to the arm moment, not to "now".
+        #expect(eveningRuns.first?.startedAt == date(2026, 8, 20, 22, 50))
+
+        // Same evening again: idempotent.
+        let again = ScheduleService.armDueRoutines(in: context, now: date(2026, 8, 20, 23, 10), calendar: calendar)
+        #expect(again.isEmpty)
+
+        // 00:05, past midnight, same occurrence still pending: must NOT
+        // arm a second run.
+        let midnight = ScheduleService.armDueRoutines(in: context, now: date(2026, 8, 21, 0, 5), calendar: calendar)
+        #expect(midnight.isEmpty)
+
+        for run in eveningRuns { RunEngineStore.shared.retire(run) }
+    }
+
+    /// Ordinary same-day arming still works and stays idempotent.
+    @Test func armingIsIdempotentPerOccurrence() throws {
+        let context = try inMemoryContext()
+        let r = routine(anchorHour: 20, anchorMinute: 0, stepMinutes: [30], armLead: 60)
+        context.insert(r)
+
+        let first = ScheduleService.armDueRoutines(in: context, now: date(2026, 8, 20, 19, 0), calendar: calendar)
+        #expect(first.count == 1)
+        #expect(first.first?.startedAt == date(2026, 8, 20, 18, 30))
+        #expect(first.first?.plan?.routine === r)
+
+        // The spawned blocks are copies, renumbered, owned by the plan.
+        let plan = try #require(first.first?.plan)
+        #expect(plan.orderedBlocks.count == 1)
+        #expect(plan.orderedBlocks.first !== r.orderedBlocks.first)
+
+        let second = ScheduleService.armDueRoutines(in: context, now: date(2026, 8, 20, 19, 30), calendar: calendar)
+        #expect(second.isEmpty)
+
+        for run in first { RunEngineStore.shared.retire(run) }
     }
 }

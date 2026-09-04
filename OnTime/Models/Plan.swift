@@ -4,6 +4,12 @@ import SwiftData
 /// A concrete sequence of blocks working toward one `deadline`.
 @Model
 final class Plan {
+    /// Stable identity for everything outside the store: Live Activity
+    /// `planId`s, notification identifiers, and the intent round trip. A
+    /// `persistentModelID` is temporary until the first save, so keys
+    /// derived from it could change under the run after autosave — minting
+    /// a duplicate Live Activity and orphaning notification bookkeeping.
+    var uuid: UUID = UUID()
     var name: String = ""
     var deadline: Date = Date()
     var createdAt: Date = Date()

@@ -6,7 +6,7 @@ import SwiftData
 /// drive blocks pull from travel time, flex blocks absorb slack, `startAt`
 /// blocks count down to a clock time instead of a fixed length).
 enum BlockKind: String, Codable, CaseIterable {
-    case fixed, drive, flex, startAt
+    case fixed, drive, flex, startAt, walk
 
     /// SF Symbol used wherever a block has no `template` (and so no symbol
     /// of its own) to fall back to — one place so every call site (`NowView`,
@@ -20,7 +20,20 @@ enum BlockKind: String, Codable, CaseIterable {
         case .drive: return "car.fill"
         case .flex: return "arrow.left.and.right"
         case .startAt: return "alarm.fill"
+        case .walk: return "figure.walk"
         }
+    }
+
+    /// Whether this kind's duration is unknown until it is lived, so the
+    /// `Solver` solves for it rather than being told it. Both cases are
+    /// "the time left over" from the deadline's point of view; they differ
+    /// only in that a `.walk` also knows what it costs to come back, and so
+    /// can say when the leftover time has run out.
+    ///
+    /// A plan may contain at most one block of either kind — the solver has
+    /// one equation, so two unknowns is `SolverError.multipleFlexBlocks`.
+    var isOpenDuration: Bool {
+        self == .flex || self == .walk
     }
 }
 

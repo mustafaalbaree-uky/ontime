@@ -20,7 +20,7 @@ enum LocationError: LocalizedError {
 final class LocationService: NSObject, CLLocationManagerDelegate {
     static let shared = LocationService()
 
-    private let manager = CLLocationManager()
+    private let manager: CLLocationManager
     private let settings = AppSettings.shared
 
     private(set) var authorization: CLAuthorizationStatus = .notDetermined
@@ -47,6 +47,17 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
     @ObservationIgnored private var geocoder = CLGeocoder()
 
     override init() {
+        // CoreLocation delivers delegate callbacks on the run loop of the
+        // thread the manager was created on; created off the main thread
+        // there may be no running run loop and nothing is ever delivered —
+        // every fix request would just time out, looking like a GPS outage.
+        // The first touch of this singleton can come from a background ETA
+        // resolution, so pin the manager's creation to main explicitly.
+        if Thread.isMainThread {
+            manager = CLLocationManager()
+        } else {
+            manager = DispatchQueue.main.sync { CLLocationManager() }
+        }
         super.init()
         manager.delegate = self
         // A kilometer of slop is fine for prayer times but wrong for a drive
@@ -169,7 +180,28 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
 
     func locationManager(_ m: CLLocationManager, didUpdateLocations locs: [CLLocation]) {
         guard let l = locs.last else { return }
-        Task { @MainActor in self.apply(fix: l) }
+        Task { @MainActor in self.receive(fix: l) }
+    }
+
+    /// CoreLocation's first delivery after `requestLocation` can be a cached
+    /// fix — minutes or hours old, from across town. Stamping that as fresh
+    /// made `hasFix(fresherThan:)` vouch for it for two minutes, and every
+    /// "Current Location" drive ETA routed from the wrong origin, which is
+    /// precisely what `currentCoordinate`'s doc promises to prevent. Reject
+    /// stale or garbage-accuracy fixes and ask again while anyone is still
+    /// waiting; the 10 second waiter timeout bounds the retry loop.
+    @MainActor
+    private func receive(fix l: CLLocation) {
+        let age = Date().timeIntervalSince(l.timestamp)
+        guard age <= 30, l.horizontalAccuracy >= 0, l.horizontalAccuracy <= 200 else {
+            if !waiters.isEmpty {
+                manager.requestLocation()
+            } else {
+                isAcquiring = false
+            }
+            return
+        }
+        apply(fix: l)
     }
 
     func locationManager(_ m: CLLocationManager, didFailWithError error: Error) {
@@ -187,7 +219,9 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
     private func apply(fix l: CLLocation) {
         settings.lastLatitude = l.coordinate.latitude
         settings.lastLongitude = l.coordinate.longitude
-        settings.lastFixAt = Date()
+        // The fix's own timestamp, not `Date()`: freshness bookkeeping must
+        // describe when the position was measured, not when it arrived.
+        settings.lastFixAt = l.timestamp
         settings.hasRealLocation = true
         isAcquiring = false
         revision &+= 1

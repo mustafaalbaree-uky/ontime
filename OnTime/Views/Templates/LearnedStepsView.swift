@@ -5,9 +5,9 @@ import SwiftData
 ///
 /// This was the Templates tab. It stopped deserving a tab once naming a step
 /// anywhere in the app created its template automatically
-/// (`QuickBlockEditorSheet.resolveTemplate`) — there was never a reason to
+/// (`QuickBlockEditorSheet.resolveTemplate`): there was never a reason to
 /// come here to *make* one, only to look at or correct what got measured. So
-/// it lives in Settings now, and there's no "new template" button: a
+/// it lives in Settings now, and there is no "new template" button. A
 /// template with no step behind it is a row that can never learn anything.
 struct LearnedStepsView: View {
     @Environment(\.modelContext) private var modelContext
@@ -16,11 +16,8 @@ struct LearnedStepsView: View {
     var body: some View {
         List {
             if templates.isEmpty {
-                ContentUnavailableView(
-                    "Nothing Learned Yet",
-                    systemImage: "square.stack",
-                    description: Text("Name a step when you add one and it shows up here. Tap through your steps as you finish them — that's what gets measured.")
-                )
+                InkEmpty("Nothing learned.")
+                    .inkListRow()
             } else {
                 ForEach(templates) { template in
                     NavigationLink {
@@ -28,18 +25,28 @@ struct LearnedStepsView: View {
                     } label: {
                         LearnedStepRow(template: template)
                     }
+                    .buttonStyle(.plain)
+                    .inkListRow()
+                    .swipeActions(edge: .trailing) {
+                        Button(role: .destructive) {
+                            delete(template)
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                        .tint(OnTimeSpectrum.late)
+                    }
                 }
-                .onDelete(perform: delete)
             }
         }
-        .navigationTitle("Learned Steps")
-        .navigationBarTitleDisplayMode(.inline)
+        .inkList()
+        .inkNavigation(title: "LEARNED STEPS")
     }
 
-    private func delete(at offsets: IndexSet) {
-        for index in offsets {
-            modelContext.delete(templates[index])
-        }
+    private func delete(_ template: TaskTemplate) {
+        // Through the cleanup helper: blocks on every screen hold unpaired
+        // `template` pointers, and a bare delete left them dangling, which is
+        // an uncatchable crash on the next property read.
+        DeleteCleanup.delete(template, in: modelContext)
     }
 }
 
@@ -60,32 +67,31 @@ private struct LearnedStepRow: View {
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: template.symbol)
-                .font(.title3)
-                .frame(width: 28)
-                .foregroundStyle(.tint)
+                .foregroundStyle(OnTimeSpectrum.secondaryText)
+                .frame(width: 24)
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(template.name)
-                    .font(.body.weight(.medium))
+                    .font(InkType.rowTitle)
+                    .foregroundStyle(OnTimeSpectrum.primaryText)
                 Text(template.samples.isEmpty
-                     ? "Never measured — using your \(template.manualEstimateMinutes) min guess"
-                     : "\(template.samples.count) measurement\(template.samples.count == 1 ? "" : "s")")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                     ? "Not measured"
+                     : "\(template.samples.count) measured")
+                    .font(InkType.rowMeta)
+                    .foregroundStyle(OnTimeSpectrum.tertiaryText)
             }
 
-            Spacer()
+            Spacer(minLength: 8)
 
-            VStack(alignment: .trailing, spacing: 1) {
-                Text("\(learned) min")
-                    .font(.headline)
-                if !template.samples.isEmpty, learned != template.manualEstimateMinutes {
-                    Text("you guessed \(template.manualEstimateMinutes)")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            }
+            StepRowValue(
+                text: "\(learned) min",
+                caption: (!template.samples.isEmpty && learned != template.manualEstimateMinutes)
+                    ? "typed \(template.manualEstimateMinutes)"
+                    : nil
+            )
         }
-        .padding(.vertical, 2)
+        .padding(InkMetric.rowPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .spectrumCard()
     }
 }

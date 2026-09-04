@@ -36,6 +36,38 @@ struct DeadlineResolverTests {
         #expect(resolved == date(19, 30, day: 20))
     }
 
+    // MARK: 10b. Midnight boundary: a 00:30 deadline at 23:50 is 40 minutes
+    // away, not a day and 40 minutes.
+
+    @Test func justBeforeMidnightRollsToEarlyTomorrowCorrectly() {
+        let now = date(23, 50)
+        let resolved = DeadlineResolver.resolve(hour: 0, minute: 30, now: now, calendar: calendar)
+        #expect(resolved == date(0, 30, day: 20))
+        #expect(resolved.timeIntervalSince(now) == 40 * 60)
+    }
+
+    // MARK: 10c. Exactly at the deadline second: not yet past, stays today.
+
+    @Test func exactlyAtTheDeadlineStaysToday() {
+        let now = date(19, 30)
+        let resolved = DeadlineResolver.resolve(hour: 19, minute: 30, now: now, calendar: calendar)
+        #expect(resolved == now)
+    }
+
+    // MARK: 10d. Out-of-range components clamp instead of silently
+    // normalizing onto the wrong day (Calendar rolls hour 25 into
+    // tomorrow's 01:00 with no error).
+
+    @Test func outOfRangeHourClampsInsteadOfRollingDays() {
+        // Release behavior (assertionFailure is a no-op there): clamped to
+        // 23:59, still today.
+        let now = date(10, 0)
+        let resolved = DeadlineResolver.resolve(hour: 25, minute: 75, now: now, calendar: calendar)
+        #expect(calendar.isDate(resolved, inSameDayAs: now))
+        #expect(calendar.component(.hour, from: resolved) == 23)
+        #expect(calendar.component(.minute, from: resolved) == 59)
+    }
+
     // MARK: 11. Deadline ahead but required start already past -> stays TODAY, reports lateness.
     // This is the bug in `time app.html`: it rolled the whole deadline to
     // tomorrow just because (deadline - prep) was already behind `now`.

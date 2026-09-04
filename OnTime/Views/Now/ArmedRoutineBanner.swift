@@ -46,33 +46,30 @@ private struct BannerRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Circle()
-                .fill(Color.green)
-                .frame(width: 8, height: 8)
+            RadarDot(isLate: isLate)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(run.plan?.name ?? "Routine")
-                    .font(.subheadline.weight(.bold))
-                    .foregroundStyle(.primary)
+                    .font(InkType.rowTitle)
+                    .foregroundStyle(OnTimeSpectrum.primaryText)
                 Text(detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(InkType.rowMeta)
+                    .foregroundStyle(OnTimeSpectrum.tertiaryText)
             }
 
             Spacer()
 
             Text(countdown)
-                .font(.headline.monospacedDigit())
-                .foregroundStyle(isLate ? .red : .primary)
+                .font(InkType.value)
+                .monospacedDigit()
+                .foregroundStyle(isLate ? OnTimeSpectrum.late : OnTimeSpectrum.primaryText)
 
             Image(systemName: "chevron.right")
-                .font(.caption.weight(.bold))
-                .foregroundStyle(.tertiary)
+                .font(InkType.label)
+                .foregroundStyle(OnTimeSpectrum.tertiaryText)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(Color.green.opacity(0.12))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .padding(InkMetric.rowPadding)
+        .spectrumCard()
         .onAppear { engine = RunEngineStore.shared.engine(for: run) }
     }
 
@@ -89,17 +86,59 @@ private struct BannerRow: View {
     }
 
     private var detail: String {
-        guard let engine else { return "Starting…" }
+        guard let engine else { return "Starting" }
         if engine.isWaitingToStart { return "Waiting to start" }
         guard let block = engine.currentBlock else { return "Running" }
-        return "Step \(run.currentIndex + 1) of \(engine.blocks.count) — \(block.name)"
+        return "Step \(run.currentIndex + 1) of \(engine.blocks.count) · \(block.name)"
     }
 
     private var countdown: String {
-        guard let target else { return "—" }
+        guard let target else { return "…" }
         let seconds = Int(abs(target.timeIntervalSince(now)))
         let minutes = seconds / 60
         let text = minutes >= 60 ? "\(minutes / 60)h \(minutes % 60)m" : "\(minutes)m"
         return isLate ? "+\(text)" : text
+    }
+}
+
+/// The live dot on an armed routine's banner. A plain 8pt circle read as a
+/// static status light; the point of the banner is that something is
+/// *running right now*, so the dot radiates the way a radar sweep does —
+/// two rings staggered half a cycle apart, expanding and fading out from
+/// under the solid centre.
+///
+/// The rings are drawn at full size and scaled down rather than grown from
+/// zero, so the animation never asks SwiftUI to re-lay-out the row: the
+/// frame is a fixed 8pt and the rings overflow it without affecting the
+/// `HStack`'s spacing.
+private struct RadarDot: View {
+    let isLate: Bool
+
+    @State private var pulsing = false
+
+    private var tint: Color { isLate ? OnTimeSpectrum.late : OnTimeSpectrum.done }
+
+    var body: some View {
+        ZStack {
+            ForEach(0..<2, id: \.self) { ring in
+                Circle()
+                    .fill(tint)
+                    .frame(width: 24, height: 24)
+                    .scaleEffect(pulsing ? 1.0 : 0.33)
+                    .opacity(pulsing ? 0.0 : 0.45)
+                    .animation(
+                        .easeOut(duration: 1.8)
+                            .repeatForever(autoreverses: false)
+                            .delay(Double(ring) * 0.9),
+                        value: pulsing
+                    )
+            }
+
+            Circle()
+                .fill(tint)
+                .frame(width: 8, height: 8)
+        }
+        .frame(width: 8, height: 8)
+        .onAppear { pulsing = true }
     }
 }

@@ -29,10 +29,19 @@ final class Place {
     /// UI but hash to different `TravelCacheKey`s and pile up in the saved
     /// places list. Every caller goes through here instead.
     static func currentLocationSentinel(in context: ModelContext) -> Place {
-        let existing = try? context.fetch(
-            FetchDescriptor<Place>(predicate: #Predicate { $0.isCurrentLocation })
-        )
-        if let found = existing?.first { return found }
+        do {
+            let existing = try context.fetch(
+                FetchDescriptor<Place>(predicate: #Predicate { $0.isCurrentLocation })
+            )
+            if let found = existing.first { return found }
+        } catch {
+            // Inserting after a *failed* fetch is exactly how duplicate
+            // sentinel rows happen — the row may well exist. Hand back a
+            // transient, un-inserted one instead and let the next
+            // successful fetch supply the real row.
+            assertionFailure("Sentinel fetch failed: \(error)")
+            return Place(name: "Current Location", isCurrentLocation: true)
+        }
         let place = Place(name: "Current Location", isCurrentLocation: true)
         context.insert(place)
         return place

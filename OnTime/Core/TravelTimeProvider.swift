@@ -108,31 +108,65 @@ struct CachedETA: Sendable {
     }
 }
 
+/// `@MainActor` because it is `@Observable` state SwiftUI reads, it writes
+/// persisted `Block` fields bound to the main-actor `ModelContext`, and its
+/// callers are all main-actor already. It used to be non-isolated, so every
+/// `resolve` mutated observed dictionaries and a SwiftData model off the
+/// main actor — legal under Swift 5.9's checking, intermittently racy in
+/// practice, and a guaranteed wall of errors on any language-mode upgrade.
+@MainActor
 @Observable
 final class TravelTimeService {
     static let shared = TravelTimeService()
 
+    /// How long a resolved ETA (live from MapKit, or a cache entry) stays
+    /// authoritative. Beyond this the manual chain wins again: an 8am ETA
+    /// served at 10pm is wrong by the whole congestion delta, and a stale
+    /// `resolvedMinutes` beating the estimate the user typed a minute ago
+    /// was a real audit finding.
+    static let resolvedFreshness: TimeInterval = 45 * 60
+
     var provider: any TravelTimeProvider
     private(set) var cache: [TravelCacheKey: CachedETA] = [:]
-    private(set) var blockSources: [ObjectIdentifier: TravelTimeSource] = [:]
+    /// Keyed by `Block.uuid`, not `ObjectIdentifier`: an address is
+    /// reusable after deallocation, so a long session could misattribute a
+    /// dead block's source or error to a fresh one, and the maps could
+    /// never be safely pruned.
+    private(set) var blockSources: [UUID: TravelTimeSource] = [:]
     /// Last-known-bad state per block, for `NowView`'s developer-mode panel.
     /// `resolve(block:)` clears a block's entry on success and sets it on
     /// every failure path (MapKit error, no GPS fix yet) — nothing here is
     /// swallowed silently the way it used to be.
-    private(set) var blockErrors: [ObjectIdentifier: String] = [:]
-    private(set) var blockResolvedAt: [ObjectIdentifier: Date] = [:]
+    private(set) var blockErrors: [UUID: String] = [:]
 
     init(provider: any TravelTimeProvider = MapKitTravelProvider()) {
         self.provider = provider
     }
 
+    /// nil key means "a current-location endpoint with no coordinate to
+    /// anchor it": caching under the (0, 0) bucket is exactly the
+    /// every-place-you-ever-stood collapse `TravelCacheKey`'s doc describes,
+    /// so such lookups simply bypass the cache.
+    private func cacheKey(from: Place, to: Place, live: CLLocationCoordinate2D?) -> TravelCacheKey? {
+        let resolvedLive = live ?? storedCoordinate
+        if resolvedLive == nil, from.isCurrentLocation || to.isCurrentLocation { return nil }
+        return TravelCacheKey(from: from, to: to, live: resolvedLive)
+    }
+
     func cachedDuration(from: Place, to: Place, live: CLLocationCoordinate2D? = nil) -> CachedETA? {
-        cache[TravelCacheKey(from: from, to: to, live: live ?? storedCoordinate)]
+        guard let key = cacheKey(from: from, to: to, live: live) else { return nil }
+        return cache[key]
     }
 
     func setCached(from: Place, to: Place, duration: TimeInterval, timestamp: Date = Date(), live: CLLocationCoordinate2D? = nil) {
-        let key = TravelCacheKey(from: from, to: to, live: live ?? storedCoordinate)
+        guard let key = cacheKey(from: from, to: to, live: live) else { return }
         cache[key] = CachedETA(duration: duration, timestamp: timestamp)
+    }
+
+    private func freshCached(_ key: TravelCacheKey?) -> CachedETA? {
+        guard let key, let entry = cache[key] else { return nil }
+        guard Date().timeIntervalSince(entry.timestamp) <= Self.resolvedFreshness else { return nil }
+        return entry
     }
 
     /// The last known coordinate, or nil if the app has never had a real fix.
@@ -142,20 +176,21 @@ final class TravelTimeService {
         return CLLocationCoordinate2D(latitude: s.lastLatitude, longitude: s.lastLongitude)
     }
 
+    /// Reachable from Settings' developer section.
     func clearCache() {
         cache.removeAll()
     }
 
     func source(for block: Block) -> TravelTimeSource {
-        blockSources[ObjectIdentifier(block)] ?? .manual
+        blockSources[block.uuid] ?? .manual
     }
 
     func error(for block: Block) -> String? {
-        blockErrors[ObjectIdentifier(block)]
+        blockErrors[block.uuid]
     }
 
     func resolvedAt(for block: Block) -> Date? {
-        blockResolvedAt[ObjectIdentifier(block)]
+        block.resolvedAt
     }
 
     /// A `.startAt` block ignores every other source here — it isn't a
@@ -181,10 +216,16 @@ final class TravelTimeService {
         // silently fell back to whatever the scrubber said (often the 10
         // min default) even though `block.resolvedMinutes` held a real,
         // just-fetched ETA. The scrubber's own UI copy ("Used until a live
-        // ETA comes in") already promises this precedence; the code just
-        // didn't honor it. `resolvedMinutes` wins for a drive block whenever
-        // it's been resolved at all.
-        if block.kind == .drive, block.resolvedMinutes > 0 {
+        // ETA comes in") already promises this precedence.
+        //
+        // But only while the ETA is *fresh*. `resolvedMinutes` used to win
+        // forever (it persisted with no timestamp), so an ETA fetched days
+        // ago at a different time of day beat an estimate the user typed a
+        // minute ago. Fresh live number first; past `resolvedFreshness` the
+        // manual chain takes over, with the stale resolved value demoted to
+        // its documented last-resort slot near the end.
+        if block.kind == .drive, block.resolvedMinutes > 0,
+           let at = block.resolvedAt, now.timeIntervalSince(at) <= Self.resolvedFreshness {
             return block.resolvedMinutes
         }
         if let override = block.estimateOverrideMinutes {
@@ -221,14 +262,14 @@ final class TravelTimeService {
         let live = (origin.isCurrentLocation || destination.isCurrentLocation)
             ? try? await LocationService.shared.currentCoordinate()
             : nil
-        let key = TravelCacheKey(from: origin, to: destination, live: live)
+        let key = cacheKey(from: origin, to: destination, live: live)
         do {
             let eta = try await provider.eta(from: origin, to: destination, departingAt: departingAt)
             let now = Date()
-            cache[key] = CachedETA(duration: eta, timestamp: now)
+            if let key { cache[key] = CachedETA(duration: eta, timestamp: now) }
             return ResolvedTravelTime(duration: eta, source: .live, fetchedAt: now)
         } catch {
-            if let cached = cache[key] {
+            if let cached = freshCached(key) {
                 return ResolvedTravelTime(duration: cached.duration, source: .cached, fetchedAt: cached.timestamp)
             }
             let manualSec = TimeInterval(manualEstimate * 60)
@@ -238,7 +279,7 @@ final class TravelTimeService {
 
     @discardableResult
     func resolve(block: Block, departingAt: Date = Date()) async -> ResolvedTravelTime {
-        let id = ObjectIdentifier(block)
+        let id = block.uuid
         let manual = manualEstimateMinutes(for: block)
 
         // "Override Route — Use Estimate": skip MapKit and the GPS fix
@@ -248,9 +289,9 @@ final class TravelTimeService {
         if block.kind == .drive, block.useManualEstimateOnly {
             let res = ResolvedTravelTime(duration: TimeInterval(manual * 60), source: .manual, fetchedAt: nil)
             block.resolvedMinutes = manual
+            block.resolvedAt = Date()
             blockSources[id] = .manual
             blockErrors[id] = nil
-            blockResolvedAt[id] = Date()
             return res
         }
 
@@ -259,9 +300,9 @@ final class TravelTimeService {
               let dest = block.destinationPlace else {
             let res = ResolvedTravelTime(duration: TimeInterval(manual * 60), source: .manual, fetchedAt: nil)
             block.resolvedMinutes = manual
+            block.resolvedAt = Date()
             blockSources[id] = .manual
             blockErrors[id] = block.kind == .drive ? "Missing origin or destination" : nil
-            blockResolvedAt[id] = Date()
             return res
         }
 
@@ -278,33 +319,33 @@ final class TravelTimeService {
             } catch {
                 let res = ResolvedTravelTime(duration: TimeInterval(manual * 60), source: .manual, fetchedAt: nil)
                 block.resolvedMinutes = manual
+                block.resolvedAt = Date()
                 blockSources[id] = .manual
                 blockErrors[id] = error.localizedDescription
-                blockResolvedAt[id] = Date()
                 return res
             }
         }
 
+        let key = cacheKey(from: origin, to: dest, live: live)
         do {
-            let key = TravelCacheKey(from: origin, to: dest, live: live)
             let eta = try await provider.eta(from: origin, to: dest, departingAt: departingAt)
             let now = Date()
-            cache[key] = CachedETA(duration: eta, timestamp: now)
+            if let key { cache[key] = CachedETA(duration: eta, timestamp: now) }
             block.resolvedMinutes = max(1, Int((eta / 60.0).rounded()))
+            block.resolvedAt = now
             blockSources[id] = .live
             blockErrors[id] = nil
-            blockResolvedAt[id] = now
             return ResolvedTravelTime(duration: eta, source: .live, fetchedAt: now)
         } catch {
             blockErrors[id] = error.localizedDescription
-            blockResolvedAt[id] = Date()
-            let key = TravelCacheKey(from: origin, to: dest, live: live)
-            if let cached = cache[key] {
+            if let cached = freshCached(key) {
                 block.resolvedMinutes = max(1, Int((cached.duration / 60.0).rounded()))
+                block.resolvedAt = cached.timestamp
                 blockSources[id] = .cached
                 return ResolvedTravelTime(duration: cached.duration, source: .cached, fetchedAt: cached.timestamp)
             }
             block.resolvedMinutes = manual
+            block.resolvedAt = Date()
             blockSources[id] = .manual
             return ResolvedTravelTime(duration: TimeInterval(manual * 60), source: .manual, fetchedAt: nil)
         }

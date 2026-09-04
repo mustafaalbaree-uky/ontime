@@ -12,6 +12,7 @@ enum Schema0 {
         Plan.self, Block.self,
         Run.self,
         ScheduledRoutine.self,
-        QuickShortcut.self
+        QuickShortcut.self,
+        WorkSession.self
     ]
 }

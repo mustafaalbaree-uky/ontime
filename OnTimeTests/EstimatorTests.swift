@@ -71,6 +71,32 @@ struct EstimatorTests {
         #expect(safe > typical)
     }
 
+    // MARK: 14b. A purely stale history cedes authority back to the prior.
+    // The blend used to weight by raw count, so ten samples from six months
+    // ago kept ~77% authority exactly as if recorded today; with the
+    // decayed effective weight they carry almost none.
+
+    @Test func staleClusterCedesToThePrior() {
+        let stale = (0..<10).map { _ in DurationObservation(minutes: 60, recordedAt: daysAgo(180)) }
+        let result = Estimator.estimate(observations: stale, prior: 10, confidence: .typical, now: now)
+
+        // Ten samples at 6 half-lives carry a total weight of ~0.16, so
+        // wData is ~5% and the estimate sits near the prior, not near 60.
+        #expect(result <= 15)
+        #expect(result >= 10)
+    }
+
+    // MARK: 14c. Fresh samples still carry full weight — the effective
+    // count equals the raw count when nothing has decayed, so this pins
+    // that the stale-data fix did not change fresh behavior.
+
+    @Test func freshSamplesKeepFullBlendWeight() {
+        let fresh = (0..<10).map { _ in DurationObservation(minutes: 60, recordedAt: now) }
+        let result = Estimator.estimate(observations: fresh, prior: 10, confidence: .typical, now: now)
+        // wData = 10/13 -> 0.769*60 + 0.231*10 = 48.5 -> 48 or 49.
+        #expect(result >= 45)
+    }
+
     // MARK: 16. A single observation doesn't swing the estimate wildly off prior.
 
     @Test func singleObservationDoesNotSwingWildly() {

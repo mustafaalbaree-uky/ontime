@@ -10,14 +10,6 @@ enum LiveActivityStartOutcome: Equatable {
     case started
     case activitiesDisabled
     case failed(String)
-
-    static func == (lhs: LiveActivityStartOutcome, rhs: LiveActivityStartOutcome) -> Bool {
-        switch (lhs, rhs) {
-        case (.started, .started), (.activitiesDisabled, .activitiesDisabled): return true
-        case let (.failed(a), .failed(b)): return a == b
-        default: return false
-        }
-    }
 }
 
 /// Keyed by `planId` rather than a single static handle — this used to
@@ -41,10 +33,21 @@ enum LiveActivityManager {
     /// below runs with no `await` in between, so the claim is atomic.
     private static var starting: Set<String> = []
 
+    /// A `.stale` activity counts as current. `staleDate` is set to the
+    /// step's target on every push, so ActivityKit flips the state to
+    /// `.stale` the moment a target passes while the app is suspended —
+    /// which is the *normal* overrun case, not a dead activity. Filtering
+    /// on `.active` alone made exactly those activities invisible: never
+    /// updated, never ended, and a duplicate requested next to them on the
+    /// next sync.
+    private static func isLive(_ a: Activity<OnTimeActivityAttributes>) -> Bool {
+        a.activityState == .active || a.activityState == .stale
+    }
+
     private static func current(for planId: String) -> Activity<OnTimeActivityAttributes>? {
-        if let a = activities[planId], a.activityState == .active { return a }
+        if let a = activities[planId], isLive(a) { return a }
         let found = Activity<OnTimeActivityAttributes>.activities.first {
-            $0.attributes.planId == planId && $0.activityState == .active
+            $0.attributes.planId == planId && isLive($0)
         }
         activities[planId] = found
         return found
@@ -81,6 +84,7 @@ enum LiveActivityManager {
         targetLabel: String = "Finish by ",
         isOverrun: Bool = false,
         latenessMinutes: Int? = nil,
+        startsRunAtTarget: Bool = false,
         endsRunAtTarget: Bool = false
     ) async -> LiveActivityStartOutcome {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return .activitiesDisabled }
@@ -114,6 +118,7 @@ enum LiveActivityManager {
             targetLabel: targetLabel,
             isOverrun: isOverrun,
             latenessMinutes: latenessMinutes,
+            startsRunAtTarget: startsRunAtTarget,
             endsRunAtTarget: endsRunAtTarget
         )
 
@@ -146,6 +151,7 @@ enum LiveActivityManager {
         targetLabel: String = "Finish by ",
         isOverrun: Bool = false,
         latenessMinutes: Int? = nil,
+        startsRunAtTarget: Bool = false,
         endsRunAtTarget: Bool = false
     ) async {
         guard let activity = current(for: planId) else { return }
@@ -163,6 +169,7 @@ enum LiveActivityManager {
             targetLabel: targetLabel,
             isOverrun: isOverrun,
             latenessMinutes: latenessMinutes,
+            startsRunAtTarget: startsRunAtTarget,
             endsRunAtTarget: endsRunAtTarget
         )
         await activity.update(.init(state: state, staleDate: staleDate(for: targetLeaveBy)))
@@ -175,6 +182,14 @@ enum LiveActivityManager {
     /// showing a bare number climbing: nothing was scheduled to tell the
     /// widget anything had changed, and the app was suspended and could
     /// not.
+    ///
+    /// **Load-bearing contract**: every `start` and `update` must go
+    /// through this. The widget's whole after-death display
+    /// (`OnTimeActivityPhase.resolve` reading `context.isStale`) and this
+    /// manager's own `isLive` check both assume staleness means "the target
+    /// passed", so an update path that omits the stale date silently
+    /// reintroduces the endless count-up bug. `finish` alone passes nil,
+    /// deliberately, because a finished activity has no future target.
     private static func staleDate(for target: Date) -> Date {
         max(target, Date().addingTimeInterval(1))
     }
@@ -202,6 +217,13 @@ enum LiveActivityManager {
         for activity in Activity<OnTimeActivityAttributes>.activities {
             await activity.end(nil, dismissalPolicy: .immediate)
         }
+        // A start that was already past its claim check when this began can
+        // register a fresh activity behind the sweep above; one more pass
+        // catches the straggler instead of leaving it until next launch.
+        for activity in Activity<OnTimeActivityAttributes>.activities {
+            await activity.end(nil, dismissalPolicy: .immediate)
+        }
+        activities.removeAll()
     }
 
     /// Ends every activity that isn't one of `planIds` — used at launch to

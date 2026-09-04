@@ -15,6 +15,11 @@ import SwiftData
 /// moved, which is exactly the kind of drift `Solver` exists to prevent.
 @Model
 final class ScheduledRoutine {
+    /// Stable identity for the arm alarm identifier namespace. The key used
+    /// to be name plus anchor time, which collided for two routines sharing
+    /// both (a weekday and a weekend variant of one errand): the later
+    /// scheduled one silently replaced the earlier one's whole alarm chain.
+    var uuid: UUID = UUID()
     var name: String = ""
     /// The one number. Local wall-clock, resolved through `DeadlineResolver`
     /// so it rolls to tomorrow on its own once today's has passed.
@@ -78,6 +83,14 @@ final class ScheduledRoutine {
     func isSkipped(on day: Date, calendar: Calendar = .current) -> Bool {
         let target = calendar.startOfDay(for: day)
         return skippedDays.contains { calendar.isDate($0, inSameDayAs: target) }
+    }
+
+    /// Undoes a "not today". Starting a routine by hand has to clear the
+    /// skip as well as `lastArmedDay`, or `nextOccurrence` keeps stepping
+    /// over today and the run lands on tomorrow's deadline.
+    func unskip(on day: Date, calendar: Calendar = .current) {
+        let target = calendar.startOfDay(for: day)
+        skippedDays.removeAll { calendar.isDate($0, inSameDayAs: target) }
     }
 
     func skip(on day: Date, calendar: Calendar = .current) {

@@ -27,7 +27,9 @@
 		<string>shortcuts</string>
 	</array>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>On Time uses your location to get live drive times for travel steps.</string>
+	<string>On Time uses your location to get live drive times for travel steps, and during a walk to work out when you need to turn around to get back on time.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>On Time follows a walk in the background so it can tell you when to turn around, even with your phone in your pocket.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
@@ -41,6 +43,7 @@
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>fetch</string>
+		<string>location</string>
 	</array>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>

@@ -29,11 +29,15 @@ struct PlaceSearchField: View {
     private var settings: AppSettings { .shared }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Image(systemName: place?.isCurrentLocation == true ? "location.fill" : "mappin.circle.fill")
-                    .foregroundStyle(.secondary)
-                TextField(label, text: $query)
+                    .foregroundStyle(OnTimeSpectrum.secondaryText)
+                TextField("", text: $query, prompt: Text(label)
+                    .foregroundColor(OnTimeSpectrum.tertiaryText))
+                    .font(.body)
+                    .foregroundStyle(OnTimeSpectrum.primaryText)
+                    .tint(OnTimeSpectrum.primaryText)
                     .onChange(of: query) { _, newValue in
                         // Only a change the *user* typed invalidates the
                         // selection. `select()` writes the chosen place's
@@ -57,7 +61,7 @@ struct PlaceSearchField: View {
                     ProgressView().controlSize(.small)
                 } else if place != nil {
                     Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
+                        .foregroundStyle(OnTimeSpectrum.done)
                 }
             }
 
@@ -70,19 +74,29 @@ struct PlaceSearchField: View {
                 HStack(spacing: 6) {
                     if locationService.isAcquiring {
                         ProgressView().controlSize(.small)
-                        Text("Getting your location…")
+                            .tint(OnTimeSpectrum.secondaryText)
+                        Text("Getting location…")
+                            .foregroundStyle(OnTimeSpectrum.tertiaryText)
                     } else if let failure = locationFailure {
                         Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.orange)
                         Text(failure)
                     } else if settings.hasRealLocation {
-                        Image(systemName: "location.fill").foregroundStyle(.green)
+                        Image(systemName: "location.fill")
+                            .foregroundStyle(OnTimeSpectrum.secondaryText)
                         Text(locationService.lastFixDescription
                              ?? String(format: "%.4f, %.4f", settings.lastLatitude, settings.lastLongitude))
+                            .foregroundStyle(OnTimeSpectrum.tertiaryText)
                     }
                 }
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(InkType.rowMeta)
+                .foregroundStyle(OnTimeSpectrum.waiting)
+            } else if let failure = locationFailure {
+                // A failed search-result resolution used to vanish here: the
+                // spinner stopped, nothing was selected, and the most likely
+                // read was "the tap didn't register."
+                Label(failure, systemImage: "exclamationmark.triangle.fill")
+                    .font(InkType.rowMeta)
+                    .foregroundStyle(OnTimeSpectrum.waiting)
             }
 
             if query.isEmpty, place == nil {
@@ -98,22 +112,15 @@ struct PlaceSearchField: View {
                         Button {
                             selectCurrentLocation()
                         } label: {
-                            Label("Current Location", systemImage: "location.fill")
-                                .font(.caption.weight(.bold))
+                            Chip(text: "Current Location", systemImage: "location.fill")
                         }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(Color.accentColor.opacity(0.15))
-                        .foregroundStyle(Color.accentColor)
-                        .clipShape(Capsule())
+                        .buttonStyle(.plain)
 
                         ForEach(savedPlaces.filter { !$0.isCurrentLocation }) { saved in
-                            Button(saved.name) { select(saved) }
-                                .font(.caption.weight(.medium))
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 4)
-                                .background(Color.secondary.opacity(0.12))
-                                .clipShape(Capsule())
+                            Button { select(saved) } label: {
+                                Chip(text: saved.name)
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
                 }
@@ -121,32 +128,43 @@ struct PlaceSearchField: View {
 
             if !completer.results.isEmpty && place == nil {
                 VStack(alignment: .leading, spacing: 0) {
-                    ForEach(completer.results, id: \.self) { result in
+                    ForEach(Array(completer.results.enumerated()), id: \.element) { index, result in
+                        if index > 0 {
+                            Rectangle()
+                                .fill(OnTimeSpectrum.hairline)
+                                .frame(height: 1)
+                        }
                         Button {
                             resolve(result)
                         } label: {
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(result.title)
-                                    .font(.subheadline.weight(.medium))
-                                    .foregroundStyle(.primary)
+                                    .font(InkType.bodyText)
+                                    .foregroundStyle(OnTimeSpectrum.primaryText)
                                 if !result.subtitle.isEmpty {
                                     Text(result.subtitle)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+                                        .font(InkType.rowMeta)
+                                        .foregroundStyle(OnTimeSpectrum.tertiaryText)
                                 }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.vertical, 6)
+                            .padding(.vertical, 8)
+                            .padding(.horizontal, 10)
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        Divider()
                     }
                 }
-                .padding(.horizontal, 4)
-                .background(Color.secondary.opacity(0.06))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .background(OnTimeSpectrum.surface)
+                .clipShape(RoundedRectangle(cornerRadius: InkMetric.innerRadius, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: InkMetric.innerRadius, style: .continuous)
+                        .strokeBorder(OnTimeSpectrum.hairline, lineWidth: 1)
+                }
             }
         }
+        .padding(InkMetric.rowPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .onAppear {
             // The "Current Location" sentinel's `name` is a label, not
             // something you'd ever want to search by — pre-filling the text
@@ -208,9 +226,14 @@ struct PlaceSearchField: View {
     private func resolve(_ completion: MKLocalSearchCompletion) {
         isResolving = true
         let request = MKLocalSearch.Request(completion: completion)
-        MKLocalSearch(request: request).start { response, _ in
+        MKLocalSearch(request: request).start { response, error in
             isResolving = false
-            guard let item = response?.mapItems.first else { return }
+            guard let item = response?.mapItems.first else {
+                locationFailure = error?.localizedDescription
+                    ?? "Could not resolve \(completion.title)."
+                return
+            }
+            locationFailure = nil
             let coord = item.placemark.coordinate
             let name = completion.title
 

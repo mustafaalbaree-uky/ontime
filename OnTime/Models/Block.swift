@@ -13,12 +13,24 @@ enum BlockStatus: String, Codable, CaseIterable {
 /// `Block` rows owned by that `Plan` instead of sharing rows between the two.
 @Model
 final class Block {
+    /// Stable identity for in-memory bookkeeping (`TravelTimeService`'s
+    /// per-block source and error maps). A `persistentModelID` is temporary
+    /// until the first save and an `ObjectIdentifier` is a reusable address;
+    /// both misattribute state under exactly the conditions this app hits.
+    /// Deliberately NOT copied by `copyForSpawn` — a copy is a new block.
+    var uuid: UUID = UUID()
     var order: Int = 0
     var name: String = ""
     var kindRaw: String = BlockKind.fixed.rawValue
     var template: TaskTemplate?
     var estimateOverrideMinutes: Int?
     var resolvedMinutes: Int = 0
+    /// When `resolvedMinutes` was last actually fetched. Without this the
+    /// resolved ETA had no age: it outranked a manual estimate the user
+    /// typed a minute ago even when it was fetched days ago at a different
+    /// time of day. `TravelTimeService.manualEstimateMinutes` only lets
+    /// `resolvedMinutes` win while this is fresh.
+    var resolvedAt: Date?
     var originPlace: Place?
     var destinationPlace: Place?
     /// "Override Route — Use Estimate": when true, `TravelTimeService.resolve`
@@ -71,7 +83,17 @@ final class Block {
     }
 
     var kind: BlockKind {
-        get { BlockKind(rawValue: kindRaw) ?? .fixed }
+        get {
+            guard let k = BlockKind(rawValue: kindRaw) else {
+                // A renamed or removed case leaves stored rows silently
+                // reclassified as .fixed — a walk block would lose its whole
+                // duration logic with no error and no schema wipe (kindRaw
+                // is just a String). Loud in debug; coerced in release.
+                assertionFailure("Unknown BlockKind raw value \(kindRaw), coercing to .fixed")
+                return .fixed
+            }
+            return k
+        }
         set { kindRaw = newValue.rawValue }
     }
 
@@ -86,9 +108,11 @@ final class Block {
     /// `.startAt` step (its target time vanished, so its duration collapsed
     /// to "time until 00:00") or a step pinned to wait for a tap. Adding a
     /// field to `Block` and forgetting to add it here is the same bug
-    /// again, so keep this exhaustive.
+    /// again, so keep this exhaustive — `PlanTests` walks the schema's
+    /// property list against an explicit copied/excluded split, so a new
+    /// field that lands in neither fails a test instead of shipping.
     func copyForSpawn(order: Int) -> Block {
-        Block(
+        let copy = Block(
             order: order,
             name: name,
             kind: kind,
@@ -102,6 +126,8 @@ final class Block {
             isOpenEnded: isOpenEnded,
             useManualEstimateOnly: useManualEstimateOnly
         )
+        copy.resolvedAt = resolvedAt
+        return copy
     }
 
     var status: BlockStatus {

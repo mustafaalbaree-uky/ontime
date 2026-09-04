@@ -29,6 +29,11 @@ targets:
         PRODUCT_NAME: OnTime
         INFOPLIST_FILE: OnTime/Info.plist
         GENERATE_INFOPLIST_FILE: NO
+        # The App Group is how the Home Screen widget gets its data: the app
+        # writes a snapshot into the shared container and the extension reads
+        # it. See Shared/OnTimeWidgetSnapshot.swift for why the widget does
+        # not open the SwiftData store instead.
+        CODE_SIGN_ENTITLEMENTS: OnTime/OnTime.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TARGETED_DEVICE_FAMILY: "1"
     dependencies:
@@ -46,6 +51,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.mammer55.ontime.widget
         PRODUCT_NAME: OnTimeWidget
         INFOPLIST_FILE: OnTimeWidget/Info.plist
+        CODE_SIGN_ENTITLEMENTS: OnTimeWidget/OnTimeWidget.entitlements
         TARGETED_DEVICE_FAMILY: "1"
     dependencies:
       - sdk: WidgetKit.framework
