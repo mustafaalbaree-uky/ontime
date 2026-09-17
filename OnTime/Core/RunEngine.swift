@@ -108,11 +108,11 @@ final class RunEngine {
         return Int((lateness / 60.0).rounded())
     }
 
-    init(run: Run, modelContext: ModelContext) {
+    init(run: Run, modelContext: ModelContext, now: Date = Date()) {
         self.run = run
         self.modelContext = modelContext
         self.autoAdvance = AppSettings.shared.autoAdvanceEnabled
-        resume()
+        resume(at: now)
     }
 
     deinit {
@@ -130,12 +130,15 @@ final class RunEngine {
 
     /// Starts (or resumes) this engine's own tick — idempotent, safe to
     /// call every time a view attaches to an already-running engine.
-    func resume() {
+    func resume(at date: Date = Date()) {
+        now = date
+        checkWaitTimeElapsed()
+        recomputeSolution()
         reconcile()
         recomputeSolution()
         resumeWalkIfNeeded()
         syncLiveActivityAndNotifications()
-        guard timer == nil else { return }
+        guard !isFinished, timer == nil else { return }
         let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
@@ -223,6 +226,10 @@ final class RunEngine {
         lastPushedOverrun = false
         lastPushedRampBucket = -1
         recomputeSolution()
+        if block.kind.isOpenDuration && run.pinnedFlexMinutes == nil {
+            pinFlexIfNeeded()
+            recomputeSolution()
+        }
         resumeWalkIfNeeded()
         syncLiveActivityAndNotifications()
     }
@@ -287,26 +294,27 @@ final class RunEngine {
     /// stamps blocks directly, which is why every manual advance logs a
     /// `DurationSample`. (An `auto:` parameter used to exist for a skip
     /// branch nothing ever exercised.)
-    func advanceStep() {
+    func advanceStep(at completedAt: Date = Date()) {
         // A stale "Next Step" tap can arrive after the run already finished
         // (a delivered notification acted on late, or the Live Activity's
         // button during its dismissal window). Without this guard it pushed
         // `currentIndex` past `blocks.count` and overwrote the honestly
         // backdated `finishedAt` with `Date()`.
         guard !isFinished else { return }
+        now = completedAt
 
         let currentIdx = run.currentIndex
         if blocks.indices.contains(currentIdx) {
             let completedBlock = blocks[currentIdx]
-            completedBlock.actualEnd = Date()
+            completedBlock.actualEnd = completedAt
             completedBlock.status = .done
 
             if completedBlock.kind == .walk { WalkTracker.shared.end(for: run.uuid) }
 
             if !completedBlock.kind.isOpenDuration, let template = completedBlock.template {
-                let elapsedSec = Date().timeIntervalSince(completedBlock.actualStart ?? run.startedAt)
+                let elapsedSec = completedAt.timeIntervalSince(completedBlock.actualStart ?? run.startedAt)
                 let elapsedMins = max(1, Int((elapsedSec / 60.0).rounded()))
-                let sample = DurationSample(minutes: elapsedMins, recordedAt: Date(), template: template)
+                let sample = DurationSample(minutes: elapsedMins, recordedAt: completedAt, template: template)
                 modelContext.insert(sample)
             }
         }
@@ -317,7 +325,7 @@ final class RunEngine {
 
         if blocks.indices.contains(nextIdx) {
             let nextBlock = blocks[nextIdx]
-            nextBlock.actualStart = Date()
+            nextBlock.actualStart = completedAt
             nextBlock.status = .active
 
             if nextBlock.kind.isOpenDuration && run.pinnedFlexMinutes == nil {
@@ -327,13 +335,13 @@ final class RunEngine {
 
             if nextBlock.kind == .drive {
                 Task {
-                    await TravelTimeService.shared.resolve(block: nextBlock, departingAt: Date())
+                    await TravelTimeService.shared.resolve(block: nextBlock, departingAt: completedAt)
                     self.recomputeSolution()
                     self.syncLiveActivityAndNotifications()
                 }
             }
         } else {
-            run.finishedAt = Date()
+            run.finishedAt = completedAt
         }
 
         recomputeSolution()
@@ -359,6 +367,8 @@ final class RunEngine {
     }
 
     func pinFlexIfNeeded() {
+        // Include the step just completed before fixing the remaining allowance.
+        recomputeSolution()
         guard let sol = currentSolution, let flexDur = sol.flexDuration else { return }
         let flexMins = max(0, Int((flexDur / 60.0).rounded()))
         run.pinnedFlexMinutes = flexMins
@@ -397,15 +407,26 @@ final class RunEngine {
 
         var durations: [BlockDuration] = []
         for block in blocks {
-            if block.kind.isOpenDuration {
+            if let start = block.actualStart, let end = block.actualEnd {
+                durations.append(.known(max(0, end.timeIntervalSince(start))))
+            } else if block.kind.isOpenDuration {
                 durations.append(.flex)
             } else {
-                let mins = TravelTimeService.shared.manualEstimateMinutes(for: block)
-                durations.append(.known(TimeInterval(mins * 60)))
+                let mins = TravelTimeService.shared.manualEstimateMinutes(for: block, now: now)
+                var duration = TimeInterval(mins * 60)
+                if let start = block.actualStart, !autoAdvanceEligible(block) {
+                    // A step awaiting a tap has consumed at least this much time.
+                    duration = max(duration, now.timeIntervalSince(start))
+                }
+                durations.append(.known(duration))
             }
         }
 
-        let pinnedFlexSeconds: TimeInterval? = run.pinnedFlexMinutes.map { Double($0 * 60) }
+        var pinnedFlexSeconds: TimeInterval? = run.pinnedFlexMinutes.map { Double($0 * 60) }
+        if let pinned = pinnedFlexSeconds, let block = currentBlock,
+           block.kind.isOpenDuration, let start = block.actualStart, block.actualEnd == nil {
+            pinnedFlexSeconds = max(pinned, now.timeIntervalSince(start))
+        }
 
         let input = SolverInput(
             durations: durations,

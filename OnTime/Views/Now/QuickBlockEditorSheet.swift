@@ -37,12 +37,9 @@ struct QuickBlockEditorSheet: View {
 
     @State private var name = ""
     @State private var kind: BlockKind = .fixed
-    /// Guards the template-selection round trip: `apply(template)` writes
-    /// the template's name into the field, and without this the `onChange`
-    /// below immediately cleared the very selection it had just made — the
-    /// exact shape of the historical `PlaceSearchField` bug.
-    @State private var isApplyingTemplate = false
     @State private var minutes = 10
+    @State private var automaticEstimate: Int?
+    @State private var hasPopulated = false
     @State private var isOpenEnded = true
     @State private var selectedTemplate: TaskTemplate?
     @State private var originPlace: Place?
@@ -66,9 +63,38 @@ struct QuickBlockEditorSheet: View {
     private var originIsCurrentLocation: Bool { originPlace?.isCurrentLocation ?? true }
 
     private var matchingTemplates: [TaskTemplate] {
-        guard kind != .startAt, !name.trimmingCharacters(in: .whitespaces).isEmpty else { return [] }
+        guard kind != .startAt, !trimmedName.isEmpty else { return [] }
         return templates.filter {
-            $0.name.localizedCaseInsensitiveContains(name) && $0.name.localizedCaseInsensitiveCompare(name) != .orderedSame
+            $0.kind != .startAt
+                && (!$0.kind.isOpenDuration || allowsOpenDuration)
+                && $0.name.localizedCaseInsensitiveContains(trimmedName)
+                && $0.id != selectedTemplate?.id
+        }
+    }
+
+    private var validationMessage: String? {
+        if kind.isOpenDuration && !allowsOpenDuration {
+            return "This sequence already has a free time or walk step."
+        }
+        if kind == .startAt && !isFirstPosition {
+            return "Wait until must be the first step."
+        }
+        if kind == .drive && !useManualEstimateOnly && destinationPlace == nil {
+            return "Choose a destination for the drive."
+        }
+        if kind == .walk && destinationPlace == nil {
+            return "Choose where the walk returns to."
+        }
+        return nil
+    }
+
+    private var kindDescription: String {
+        switch kind {
+        case .fixed: return "A task with an estimated duration."
+        case .drive: return "Travel time from your route, or a manual estimate."
+        case .flex: return "Uses the time left before the next step."
+        case .walk: return "A walk with a return time and turnaround alert."
+        case .startAt: return "Counts down to a clock time before the next step."
         }
     }
 
@@ -78,13 +104,13 @@ struct QuickBlockEditorSheet: View {
 
     /// The kinds this position and this sequence still allow.
     private var kindOptions: [ChipOption<BlockKind>] {
-        var options = [ChipOption(BlockKind.fixed, "Fixed"), ChipOption(BlockKind.drive, "Drive")]
-        if allowsOpenDuration || kind.isOpenDuration {
-            options.append(ChipOption(BlockKind.flex, "Flex"))
+        var options = [ChipOption(BlockKind.fixed, "Task"), ChipOption(BlockKind.drive, "Drive")]
+        if allowsOpenDuration {
+            options.append(ChipOption(BlockKind.flex, "Free time"))
             options.append(ChipOption(BlockKind.walk, "Walk"))
         }
         if isFirstPosition {
-            options.append(ChipOption(BlockKind.startAt, "Starts at"))
+            options.append(ChipOption(BlockKind.startAt, "Wait until"))
         }
         return options
     }
@@ -108,23 +134,25 @@ struct QuickBlockEditorSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .scrollIndicators(.hidden)
+            .scrollDismissesKeyboard(.interactively)
             .inkNavigation(title: existingBlock == nil ? "NEW STEP" : "EDIT STEP")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                         .inkToolbarButton()
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { save() }
-                        .inkToolbarButton()
-                        .disabled((kind == .drive && !useManualEstimateOnly && destinationPlace == nil)
-                                  || (kind == .walk && destinationPlace == nil))
-                }
             }
+            .safeAreaInset(edge: .bottom) { saveBar }
             .sheet(isPresented: $pickingTargetTime) {
-                FullScreenTimePicker(title: "Starts At", date: $targetTime)
+                FullScreenTimePicker(title: "Wait Until", date: $targetTime)
             }
             .onAppear { populate() }
+            .onChange(of: kind) { _, newKind in
+                if let selectedTemplate, selectedTemplate.kind != newKind {
+                    self.selectedTemplate = nil
+                    automaticEstimate = nil
+                }
+            }
         }
     }
 
@@ -132,16 +160,17 @@ struct QuickBlockEditorSheet: View {
 
     private var titleSection: some View {
         VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
-            SectionLabel("TITLE")
+            SectionLabel("NAME")
 
             InkCard {
-                InkTextRow(placeholder: "Title", text: $name, autocapitalization: .sentences)
-                    .onChange(of: name) { _, _ in
-                        if isApplyingTemplate {
-                            isApplyingTemplate = false
-                            return
-                        }
-                        selectedTemplate = nil
+                InkTextRow(placeholder: "Step name", text: $name, autocapitalization: .sentences)
+                    .onChange(of: name) { _, newName in
+                        guard let selectedTemplate,
+                              selectedTemplate.name.localizedCaseInsensitiveCompare(
+                                newName.trimmingCharacters(in: .whitespacesAndNewlines)
+                              ) != .orderedSame else { return }
+                        self.selectedTemplate = nil
+                        automaticEstimate = nil
                     }
 
                 // A step you have done before, offered by name. Tapping one
@@ -157,7 +186,7 @@ struct QuickBlockEditorSheet: View {
                             Text(template.name)
                                 .font(InkType.rowTitle)
                                 .foregroundStyle(OnTimeSpectrum.primaryText)
-                            Text("\(template.samples.count) before")
+                            Text(template.samples.isEmpty ? "Saved" : "\(template.samples.count) completed")
                                 .font(InkType.rowMeta)
                                 .foregroundStyle(OnTimeSpectrum.tertiaryText)
                             Spacer(minLength: 0)
@@ -167,7 +196,9 @@ struct QuickBlockEditorSheet: View {
                 }
 
                 if matchingTemplates.isEmpty, let selectedTemplate {
-                    InkTextLine(text: "Linked to \(selectedTemplate.name)")
+                    InkTextLine(text: selectedTemplate.samples.isEmpty
+                                ? "Saved step"
+                                : "\(selectedTemplate.samples.count) completed", color: OnTimeSpectrum.secondaryText)
                 }
             }
         }
@@ -175,14 +206,17 @@ struct QuickBlockEditorSheet: View {
 
     private var kindSection: some View {
         VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
-            SectionLabel("KIND")
+            SectionLabel("TYPE")
             ChipPicker(options: kindOptions, selection: $kind)
+            Text(kindDescription)
+                .font(InkType.bodyText)
+                .foregroundStyle(OnTimeSpectrum.secondaryText)
         }
     }
 
     private var walkSection: some View {
         VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
-            SectionLabel("WALK")
+            SectionLabel("RETURN TO")
             InkCard {
                 PlaceSearchField(label: "Back to", place: $destinationPlace)
             }
@@ -191,7 +225,7 @@ struct QuickBlockEditorSheet: View {
 
     private var startAtSection: some View {
         VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
-            SectionLabel("STARTS AT")
+            SectionLabel("WAIT UNTIL")
             InkCard {
                 InkValueRow(title: "Time",
                             value: TimeFormatting.clockString(targetTime),
@@ -204,7 +238,7 @@ struct QuickBlockEditorSheet: View {
         VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
             SectionLabel("ROUTE")
             InkCard {
-                InkToggleRow(title: "Use estimate only", isOn: $useManualEstimateOnly)
+                InkToggleRow(title: "Use manual duration", isOn: $useManualEstimateOnly)
 
                 if !useManualEstimateOnly {
                     if showingOriginPicker {
@@ -256,7 +290,7 @@ struct QuickBlockEditorSheet: View {
                     // untitled step never gets one, so the toggle would have
                     // nothing to affect.
                     if !trimmedName.isEmpty, originIsCurrentLocation {
-                        InkToggleRow(title: "Follow my location", isOn: $followsMyLocationForTemplate)
+                        InkToggleRow(title: "Remember current location", isOn: $followsMyLocationForTemplate)
                     }
                 }
             }
@@ -265,41 +299,64 @@ struct QuickBlockEditorSheet: View {
 
     @ViewBuilder
     private var durationSection: some View {
-        if showsDuration {
-            VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
-                SectionLabel(kind == .drive ? "DRIVE ESTIMATE" : "DURATION")
-                VStack(spacing: InkMetric.cardToCard) {
-                    InkCard {
-                        InkRow {
-                            DurationScrubber(minutes: $minutes)
-                        }
+        VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
+            SectionLabel(showsDuration ? "DURATION" : "WHEN TIME IS UP")
+            if kind.isOpenDuration {
+                Text("This step ends when you mark it complete.")
+                    .font(InkType.bodyText)
+                    .foregroundStyle(OnTimeSpectrum.secondaryText)
+            } else {
+                InkCard {
+                    if showsDuration {
+                        InkRow { DurationScrubber(minutes: $minutes) }
                     }
-                    InkCard {
-                        InkToggleRow(title: "Move on automatically", isOn: $isOpenEnded)
-                    }
+                    InkToggleRow(title: "Advance automatically", isOn: $isOpenEnded)
                 }
+                Text(isOpenEnded
+                     ? "Advances when automatic advance is on for the countdown."
+                     : "Waits for you to mark this step complete.")
+                    .font(InkType.rowMeta)
+                    .foregroundStyle(OnTimeSpectrum.secondaryText)
             }
-        } else {
-            InkCard {
-                InkToggleRow(title: "Move on automatically", isOn: $isOpenEnded)
+            if kind == .drive && !useManualEstimateOnly {
+                Text("Live travel time replaces this estimate when available.")
+                    .font(InkType.rowMeta)
+                    .foregroundStyle(OnTimeSpectrum.secondaryText)
             }
         }
     }
 
+    private var saveBar: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let validationMessage {
+                Label(validationMessage, systemImage: "exclamationmark.circle")
+                    .font(InkType.rowMeta)
+                    .foregroundStyle(OnTimeSpectrum.waiting)
+            }
+            Button(existingBlock == nil ? "Add step" : "Save changes", action: save)
+                .font(InkType.buttonProminent)
+                .buttonStyle(SpectrumButtonStyle())
+                .disabled(validationMessage != nil)
+                .opacity(validationMessage == nil ? 1 : 0.38)
+        }
+        .padding(.horizontal, InkMetric.page)
+        .padding(.top, 12)
+        .padding(.bottom, 12)
+        .background(OnTimeSpectrum.ink)
+    }
+
     private func apply(_ template: TaskTemplate) {
-        // Guard only when the assignment will actually change the text — a
-        // no-op assignment never fires `onChange`, and a flag left standing
-        // would swallow the user's next keystroke instead. (Today the
-        // autocomplete list excludes exact matches, so the names always
-        // differ; the check is what keeps that assumption from becoming a
-        // trap.)
-        if name != template.name { isApplyingTemplate = true }
+        guard !template.kind.isOpenDuration || allowsOpenDuration else { return }
         name = template.name
         kind = template.kind
         selectedTemplate = template
         let obs = template.samples.map { DurationObservation(minutes: $0.minutes, recordedAt: $0.recordedAt) }
         let confidence: Confidence = AppSettings.shared.confidenceIsSafe ? .safe : .typical
         minutes = Estimator.estimate(observations: obs, prior: template.manualEstimateMinutes, confidence: confidence)
+        automaticEstimate = minutes
+        if template.kind == .walk {
+            destinationPlace = template.destinationPlace
+        }
         if template.kind == .drive {
             originPlace = template.originPlace
             destinationPlace = template.destinationPlace
@@ -313,10 +370,15 @@ struct QuickBlockEditorSheet: View {
     }
 
     private func populate() {
+        guard !hasPopulated else { return }
+        hasPopulated = true
         if let block = existingBlock {
             name = block.name
             kind = block.kind
-            minutes = block.estimateOverrideMinutes ?? (block.resolvedMinutes > 0 ? block.resolvedMinutes : 10)
+            minutes = TravelTimeService.shared.manualEstimateMinutes(for: block)
+            if block.estimateOverrideMinutes == nil, block.template != nil {
+                automaticEstimate = minutes
+            }
             isOpenEnded = block.isOpenEnded
             selectedTemplate = block.template
             originPlace = block.originPlace
@@ -335,8 +397,11 @@ struct QuickBlockEditorSheet: View {
     }
 
     private func save() {
+        guard validationMessage == nil else { return }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let template = resolveTemplate(named: trimmed)
+        let estimateOverride = (kind.isOpenDuration || kind == .startAt
+                                || (template != nil && automaticEstimate == minutes)) ? nil : minutes
         let displayName = trimmed.isEmpty ? genericName() : trimmed
         let resolvedOrigin = kind == .drive ? (originPlace ?? currentLocationPlace()) : nil
         let targetComps = kind == .startAt ? Calendar.current.dateComponents([.hour, .minute], from: targetTime) : nil
@@ -345,7 +410,9 @@ struct QuickBlockEditorSheet: View {
             block.name = displayName
             block.kind = kind
             block.template = template
-            block.estimateOverrideMinutes = (kind.isOpenDuration || kind == .startAt) ? nil : minutes
+            block.estimateOverrideMinutes = estimateOverride
+            block.resolvedMinutes = 0
+            block.resolvedAt = nil
             block.originPlace = resolvedOrigin
             block.destinationPlace = (kind == .drive || kind == .walk) ? destinationPlace : nil
             block.targetHour = targetComps?.hour
@@ -358,7 +425,7 @@ struct QuickBlockEditorSheet: View {
                 name: displayName,
                 kind: kind,
                 template: template,
-                estimateOverrideMinutes: (kind.isOpenDuration || kind == .startAt) ? nil : minutes,
+                estimateOverrideMinutes: estimateOverride,
                 originPlace: resolvedOrigin,
                 destinationPlace: (kind == .drive || kind == .walk) ? destinationPlace : nil,
                 targetHour: targetComps?.hour,
@@ -386,6 +453,9 @@ struct QuickBlockEditorSheet: View {
                 template.originPlace = resolvedOrigin
             }
         }
+        if kind == .walk, let template {
+            template.destinationPlace = destinationPlace
+        }
 
         onSave()
         dismiss()
@@ -399,10 +469,13 @@ struct QuickBlockEditorSheet: View {
     /// the way "Shower" or "Drive to masjid" are, it's a one-off clock time.
     private func resolveTemplate(named trimmed: String) -> TaskTemplate? {
         guard kind != .startAt, !trimmed.isEmpty else { return nil }
-        if let selectedTemplate, selectedTemplate.name.localizedCaseInsensitiveCompare(trimmed) == .orderedSame {
+        if let selectedTemplate, selectedTemplate.kind == kind,
+           selectedTemplate.name.localizedCaseInsensitiveCompare(trimmed) == .orderedSame {
             return selectedTemplate
         }
-        if let existing = templates.first(where: { $0.name.localizedCaseInsensitiveCompare(trimmed) == .orderedSame }) {
+        if let existing = templates.first(where: {
+            $0.kind == kind && $0.name.localizedCaseInsensitiveCompare(trimmed) == .orderedSame
+        }) {
             return existing
         }
         let newTemplate = TaskTemplate(name: trimmed, symbol: kind.defaultSymbol, kind: kind, manualEstimateMinutes: minutes)
@@ -414,7 +487,7 @@ struct QuickBlockEditorSheet: View {
         switch kind {
         case .fixed: return "Step"
         case .drive: return "Drive"
-        case .flex: return "Go"
+        case .flex: return "Free time"
         case .walk: return "Walk"
         case .startAt: return "Wait"
         }
