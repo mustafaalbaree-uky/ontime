@@ -17,7 +17,22 @@ struct ScheduledRoutinesView: View {
     @Query(sort: [SortDescriptor(\ScheduledRoutine.anchorHour), SortDescriptor(\ScheduledRoutine.anchorMinute)])
     private var routines: [ScheduledRoutine]
 
-    @State private var editingRoutine: ScheduledRoutine?
+    /// One route, one `.sheet`: SwiftUI honours a single sheet presentation
+    /// per view, so the time picker could not be a second modifier beside the
+    /// editor's. A new sheet is a new case.
+    private enum Sheet: Identifiable {
+        case edit(ScheduledRoutine)
+        case time(ScheduledRoutine)
+
+        var id: String {
+            switch self {
+            case .edit(let routine): return "edit-\(routine.uuid.uuidString)"
+            case .time(let routine): return "time-\(routine.uuid.uuidString)"
+            }
+        }
+    }
+
+    @State private var sheet: Sheet?
     /// The row the plus button just inserted, so an abandoned editor (no
     /// name, no steps, dismissed) deletes it instead of leaving a permanent
     /// "Untitled, 7:00 AM, every day" row per aborted attempt.
@@ -33,12 +48,27 @@ struct ScheduledRoutinesView: View {
                         .inkListRow()
                 } else {
                     ForEach(routines) { routine in
-                        Button {
-                            editingRoutine = routine
-                        } label: {
-                            RoutineRow(routine: routine, now: now)
-                        }
-                        .buttonStyle(.plain)
+                        // Start Now and Skip Today are on the card as well as
+                        // behind the swipes. They were swipe only, and the
+                        // person this app is for did not know either existed:
+                        // he reported that a stopped routine "doesn't start
+                        // counting down" again, which is what the hidden
+                        // Start Now does.
+                        RoutineRow(
+                            routine: routine,
+                            now: now,
+                            onEdit: { sheet = .edit(routine) },
+                            onChangeTime: { sheet = .time(routine) },
+                            onStart: { startNow(routine) },
+                            onSkip: {
+                                routine.skip(on: Date())
+                                refresh()
+                            },
+                            onUndoSkip: {
+                                routine.unskip(on: Date())
+                                refresh()
+                            }
+                        )
                         .inkListRow()
                         .swipeActions(edge: .trailing) {
                             Button(role: .destructive) {
@@ -83,14 +113,14 @@ struct ScheduledRoutinesView: View {
                         let routine = ScheduledRoutine(name: "", anchorHour: 7, anchorMinute: 0)
                         modelContext.insert(routine)
                         draftRoutine = routine
-                        editingRoutine = routine
+                        sheet = .edit(routine)
                     } label: {
                         Image(systemName: "plus")
                             .foregroundStyle(OnTimeSpectrum.primaryText)
                     }
                 }
             }
-            .sheet(item: $editingRoutine, onDismiss: {
+            .sheet(item: $sheet, onDismiss: {
                 if let draft = draftRoutine {
                     draftRoutine = nil
                     if draft.name.trimmingCharacters(in: .whitespaces).isEmpty && draft.orderedBlocks.isEmpty {
@@ -98,8 +128,17 @@ struct ScheduledRoutinesView: View {
                     }
                 }
                 refresh()
-            }) { routine in
-                ScheduledRoutineEditor(routine: routine)
+            }) { route in
+                switch route {
+                case .edit(let routine):
+                    ScheduledRoutineEditor(routine: routine)
+                case .time(let routine):
+                    // An iqama time moves by a quarter of an hour a few times
+                    // a year, and changing it meant opening the whole editor
+                    // to reach the one number. The picker commits on Done
+                    // only, and `onDismiss` above runs `refresh()` either way.
+                    FullScreenTimePicker(title: "Be Done By", date: anchorBinding(for: routine))
+                }
             }
         }
     }
@@ -117,9 +156,40 @@ struct ScheduledRoutinesView: View {
         WidgetBridge.shared.setNeedsRefresh()
     }
 
+    /// Starts the routine (or finds the run it already has) and leaves for
+    /// its countdown. It used to stay on this list, where the only sign that
+    /// anything had happened was one status line changing colour.
+    ///
+    /// The way to the run's page is the route a notification tap takes:
+    /// `NowView` listens for `openRunNotification` and looks the run up again
+    /// on the next runloop pass, which covers its query not having caught up
+    /// with a run minted a moment ago.
     private func startNow(_ routine: ScheduledRoutine) {
-        ScheduleService.armNow(routine, in: modelContext)
-        now = Date()
+        guard let run = ScheduleService.armNow(routine, in: modelContext) else {
+            now = Date()
+            return
+        }
+        var payload = ["routineId": routine.uuid.uuidString]
+        if let planId = run.plan?.uuid.uuidString { payload["planId"] = planId }
+        NotificationCenter.default.post(name: OnTimeShared.openRunNotification,
+                                        object: nil, userInfo: payload)
+        dismiss()
+    }
+
+    private func anchorBinding(for routine: ScheduledRoutine) -> Binding<Date> {
+        Binding(
+            get: {
+                var comps = Calendar.current.dateComponents([.year, .month, .day], from: Date())
+                comps.hour = routine.anchorHour
+                comps.minute = routine.anchorMinute
+                return Calendar.current.date(from: comps) ?? Date()
+            },
+            set: { newValue in
+                let comps = Calendar.current.dateComponents([.hour, .minute], from: newValue)
+                routine.anchorHour = comps.hour ?? routine.anchorHour
+                routine.anchorMinute = comps.minute ?? routine.anchorMinute
+            }
+        )
     }
 
     private func delete(_ routine: ScheduledRoutine) {
@@ -131,9 +201,37 @@ struct ScheduledRoutinesView: View {
     }
 }
 
+/// One routine as a card: the name and status open the editor, the time
+/// opens the time picker, and the actions that fit its state sit along the
+/// bottom edge.
+///
+/// It is several buttons rather than one button around the card, because a
+/// button inside another button's label never receives its tap. Each one is
+/// `.plain` styled, which is also what lets a `List` row hold more than one:
+/// with the default style the row itself takes the tap and fires them all.
 private struct RoutineRow: View {
     let routine: ScheduledRoutine
     let now: Date
+    var onEdit: () -> Void
+    var onChangeTime: () -> Void
+    var onStart: () -> Void
+    var onSkip: () -> Void
+    var onUndoSkip: () -> Void
+
+    private enum Action: Identifiable {
+        case open, start, skip, undoSkip
+
+        var id: Self { self }
+
+        var title: String {
+            switch self {
+            case .open: return "Open"
+            case .start: return "Start Now"
+            case .skip: return "Skip Today"
+            case .undoSkip: return "Undo Skip"
+            }
+        }
+    }
 
     @Query(filter: #Predicate<Run> { $0.finishedAt == nil }) private var openRuns: [Run]
 
@@ -146,31 +244,107 @@ private struct RoutineRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(routine.name.isEmpty ? "Untitled" : routine.name)
-                    .font(InkType.rowTitle)
-                    .foregroundStyle(OnTimeSpectrum.primaryText)
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Button(action: onEdit) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(routine.name.isEmpty ? "Untitled" : routine.name)
+                            .font(InkType.rowTitle)
+                            .foregroundStyle(OnTimeSpectrum.primaryText)
 
-                Text("\(timeString(hour: routine.anchorHour, minute: routine.anchorMinute)) · \(dayLabel)")
-                    .font(InkType.rowMeta)
-                    .foregroundStyle(OnTimeSpectrum.tertiaryText)
+                        Text("\(dayLabel) · \(stepCountLabel)")
+                            .font(InkType.rowMeta)
+                            .foregroundStyle(OnTimeSpectrum.tertiaryText)
 
-                Text(statusLine)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(statusColor)
+                        Text(statusLine)
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(statusColor)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                Button(action: onChangeTime) {
+                    Text(timeString(hour: routine.anchorHour, minute: routine.anchorMinute))
+                        .font(InkType.value)
+                        .monospacedDigit()
+                        .foregroundStyle(OnTimeSpectrum.primaryText)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 9)
+                        .background {
+                            RoundedRectangle(cornerRadius: InkMetric.innerRadius, style: .continuous)
+                                .strokeBorder(OnTimeSpectrum.edge, lineWidth: 1)
+                        }
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Be done by \(timeString(hour: routine.anchorHour, minute: routine.anchorMinute))")
+                .accessibilityHint("Changes the time")
             }
+            .padding(InkMetric.rowPadding)
 
-            Spacer()
+            if !actions.isEmpty {
+                Rectangle()
+                    .fill(OnTimeSpectrum.hairline)
+                    .frame(height: 1)
 
-            Text("\(routine.orderedBlocks.count) step\(routine.orderedBlocks.count == 1 ? "" : "s")")
-                .font(InkType.rowMeta)
-                .foregroundStyle(OnTimeSpectrum.tertiaryText)
+                HStack(spacing: 0) {
+                    ForEach(actions) { action in
+                        if action != actions.first {
+                            Rectangle()
+                                .fill(OnTimeSpectrum.hairline)
+                                .frame(width: 1, height: 20)
+                        }
+                        Button {
+                            perform(action)
+                        } label: {
+                            Text(action.title)
+                                .font(InkType.buttonQuiet)
+                                .foregroundStyle(OnTimeSpectrum.primaryText)
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
         }
-        .padding(InkMetric.rowPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
         .spectrumCard()
         .opacity(routine.isEnabled ? 1 : 0.5)
+    }
+
+    /// What this routine can do from here, given where it is in its day.
+    /// A routine that is off or has no steps can do nothing, so it gets no
+    /// row at all rather than a row of dead buttons.
+    private var actions: [Action] {
+        guard routine.isEnabled, !routine.orderedBlocks.isEmpty else { return [] }
+        // `armNow` hands back the open run rather than minting a second one,
+        // so the same call is what opens it.
+        if hasOpenRun { return [.open] }
+        if routine.isSkipped(on: now) { return [.start, .undoSkip] }
+        if isDone { return [.start] }
+        // `skip(on:)` skips today's date. Offered only while the next
+        // occurrence is today's: late in the evening, with tomorrow's up
+        // next, it would mark the row "Skipped today" and skip nothing.
+        if let occurrence, Calendar.current.isDateInToday(occurrence.deadline) {
+            return [.start, .skip]
+        }
+        return [.start]
+    }
+
+    private func perform(_ action: Action) {
+        switch action {
+        case .open, .start: onStart()
+        case .skip: onSkip()
+        case .undoSkip: onUndoSkip()
+        }
+    }
+
+    private var stepCountLabel: String {
+        let count = routine.orderedBlocks.count
+        return count == 1 ? "1 step" : "\(count) steps"
     }
 
     private var statusLine: String {
@@ -181,8 +355,8 @@ private struct RoutineRow: View {
         if occurrence.isArmed(at: now) {
             // "Active now" was printed for an occurrence that had armed and
             // then been cancelled, so the row claimed a countdown was
-            // running when there was nothing left to open. Swipe right to
-            // start it again.
+            // running when there was nothing left to open. Start Now on
+            // the card starts it again.
             if isDone { return "Already ran" }
             return "Active now"
         }
