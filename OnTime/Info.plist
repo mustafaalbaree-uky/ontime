@@ -26,6 +26,11 @@
 	<array>
 		<string>shortcuts</string>
 	</array>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>On Time uses your location to get live drive times for travel steps, and during a walk to work out when you need to turn around to get back on time.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>

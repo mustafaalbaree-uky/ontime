@@ -299,7 +299,7 @@ final class Notifications: NSObject, UNUserNotificationCenterDelegate {
         return [armAt, mustStartAt]
     }
 
-    private static func armBody(alertAt: Date, mustStartAt: Date) -> String {
+    static func armBody(alertAt: Date, mustStartAt: Date) -> String {
         let minutes = Int((mustStartAt.timeIntervalSince(alertAt) / 60.0).rounded())
         // "Tap to open the countdown" is a promise now kept: a plain tap on
         // this notification routes through `OnTimeShared.openRunNotification`

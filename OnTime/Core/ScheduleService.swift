@@ -201,11 +201,17 @@ enum ScheduleService {
     /// forward through. Backdating matters when the app is opened after
     /// `mustStartAt` too: `RunEngine.checkWaitTimeElapsed` then begins step 1
     /// immediately and `reconcile()` walks forward from there.
+    ///
+    /// `derivedIdentity` gives the plan the uuid the Pi already used if it
+    /// started this occurrence's Live Activity by push, so the run adopts
+    /// that activity instead of raising a second one. See
+    /// `OccurrenceIdentity`, including why `armNow` opts out.
     @discardableResult
     static func arm(_ routine: ScheduledRoutine,
                     occurrence: Occurrence,
                     in context: ModelContext,
-                    calendar: Calendar = .current) -> Run? {
+                    calendar: Calendar = .current,
+                    derivedIdentity: Bool = true) -> Run? {
         let copies = routine.orderedBlocks.enumerated().map { index, block in
             let copy = block.copyForSpawn(order: index)
             context.insert(copy)
@@ -224,7 +230,10 @@ enum ScheduleService {
             blocks: copies,
             in: context,
             startedAt: occurrence.armAt,
-            routine: routine
+            routine: routine,
+            planUUID: derivedIdentity
+                ? OccurrenceIdentity.planUUID(routine: routine.uuid, deadline: occurrence.deadline, calendar: calendar)
+                : nil
         )
         // Stamped from the occurrence's own deadline, never from the clock
         // — see `hasArmed(_:for:calendar:)`.
@@ -264,7 +273,7 @@ enum ScheduleService {
         let clamped = Occurrence(deadline: occurrence.deadline,
                                  mustStartAt: occurrence.mustStartAt,
                                  armAt: min(occurrence.armAt, now))
-        let run = arm(routine, occurrence: clamped, in: context, calendar: calendar)
+        let run = arm(routine, occurrence: clamped, in: context, calendar: calendar, derivedIdentity: false)
         refreshArmAlarms(in: context, now: now, calendar: calendar)
         return run
     }
@@ -400,6 +409,13 @@ enum ScheduleService {
                 return (routine, occurrence)
             }
             .sorted { $0.1.armAt < $1.1.armAt }
+
+        // The same list, handed to the Pi, which starts each occurrence's
+        // Live Activity by push at `armAt`. Not subject to the budget below:
+        // that cap is about iOS's pending notification limit.
+        PiSchedule.publish(occurrences.compactMap { routine, occurrence in
+            PiSchedule.armEvent(for: routine, occurrence: occurrence, calendar: calendar)
+        })
 
         var budget = Self.armAlarmBudget
         for (routine, occurrence) in occurrences {

@@ -1,0 +1,15 @@
+[Unit]
+Description=OnTime push schedule (fires Live Activity pushes at their times)
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+User=mustafa
+ExecStart=/usr/bin/python3 /home/mustafa/.ontime-push/ontime_pushd.py
+# Binds the Tailscale address, which does not exist until tailscaled is up.
+# A start that loses that race exits and is retried.
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

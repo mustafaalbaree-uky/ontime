@@ -83,8 +83,13 @@ struct RootView: View {
         // indistinguishable. See `OnTimeSpectrum.accent`.
         .tint(OnTimeSpectrum.accent)
         .task {
-            resumeOpenRuns()
+            // Arm first, sweep second. The Pi may have started a routine's
+            // Live Activity by push before this launch, and the run that
+            // owns it is minted by the arming pass. Sweeping first found an
+            // activity with no open run behind it and ended it, a moment
+            // before the run that would have adopted it existed.
             armScheduledRoutines()
+            resumeOpenRuns()
         }
         .onChange(of: scenePhase) { _, phase in
             // The opportunistic half of the arming model: any time the app

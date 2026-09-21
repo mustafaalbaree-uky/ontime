@@ -31,8 +31,20 @@ enum PushTokens {
         }
     }
 
+    private static let defaultsKey = "pushToStartTokenHex"
+
+    /// The last token the system handed over, kept across launches because
+    /// `PiSchedule` needs it on launches where the sequence never emits.
+    static var pushToStartHex: String? {
+        UserDefaults.standard.string(forKey: defaultsKey)
+    }
+
     private static func record(pushToStart token: Data) {
         let hex = token.map { String(format: "%02x", $0) }.joined()
+        if hex != pushToStartHex {
+            UserDefaults.standard.set(hex, forKey: defaultsKey)
+            PiSchedule.tokenChanged()
+        }
         let payload: [String: String] = [
             "pushToStart": hex,
             "updatedAt": ISO8601DateFormatter().string(from: Date())

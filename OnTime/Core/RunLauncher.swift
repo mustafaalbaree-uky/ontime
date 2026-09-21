@@ -25,10 +25,17 @@ enum RunLauncher {
     /// solution and pushes its first Live Activity during this call — a
     /// backdate applied afterwards left that first push with the wrong
     /// span, exactly the state backdating exists to protect.
+    ///
+    /// `planUUID` is for a routine arming on schedule: the Pi may already
+    /// have started this occurrence's Live Activity under a uuid both sides
+    /// derive (`OccurrenceIdentity`), and it has to be on the plan before the
+    /// engine's first sync below, or that sync requests a second activity.
     @discardableResult
     static func start(deadline: Date, name: String, blocks: [Block], in context: ModelContext,
-                      startedAt: Date = Date(), routine: ScheduledRoutine? = nil) -> Run {
+                      startedAt: Date = Date(), routine: ScheduledRoutine? = nil,
+                      planUUID: UUID? = nil) -> Run {
         let plan = Plan(name: name, deadline: deadline, routine: routine)
+        if let planUUID { plan.uuid = planUUID }
         context.insert(plan)
 
         for block in blocks {
