@@ -159,6 +159,7 @@ enum ScheduleService {
     static func catchUp(in context: ModelContext,
                         now: Date = Date(),
                         calendar: Calendar = .current) {
+        noteBaselines(in: context)
         armDueRoutines(in: context, now: now, calendar: calendar)
         refreshArmAlarms(in: context, now: now, calendar: calendar)
     }
@@ -316,9 +317,89 @@ enum ScheduleService {
     /// and there is no single "saved" moment to hook.
     static func syncAllLiveRuns(in context: ModelContext, calendar: Calendar = .current) {
         guard let routines = try? context.fetch(FetchDescriptor<ScheduledRoutine>()) else { return }
+        var rearmed = false
         for routine in routines {
             syncLiveRuns(for: routine, in: context, calendar: calendar)
+            if applyEdit(to: routine, in: context, calendar: calendar) { rearmed = true }
         }
+        // Clearing `lastArmedDay` only makes the occurrence eligible again;
+        // this is the pass that actually arms it if its window is open.
+        if rearmed { armDueRoutines(in: context, calendar: calendar) }
+    }
+
+    // MARK: - Edits to a routine that already armed
+
+    /// What each routine looked like the last time this service saw it, so
+    /// an edit can be told apart from the editor merely being opened and
+    /// closed. In memory on purpose: an edit and the refresh that follows it
+    /// happen in one session, and `catchUp` records the baseline at launch.
+    private static var lastSeen: [UUID: String] = [:]
+
+    /// Everything about a routine that changes what its run should be.
+    private static func signature(of routine: ScheduledRoutine) -> String {
+        let steps = routine.orderedBlocks.map { block in
+            "\(block.name)|\(block.kindRaw)|\(TravelTimeService.shared.manualEstimateMinutes(for: block))|\(block.isOpenEnded)"
+        }
+        return "\(routine.anchorHour):\(routine.anchorMinute)|\(routine.weekdaysRaw)|\(routine.armLeadMinutes)|\(routine.isEnabled)|"
+            + steps.joined(separator: ";")
+    }
+
+    /// Records every routine's current shape as the baseline for
+    /// `applyEdit`. Called from `catchUp`, which runs at launch and on every
+    /// foreground.
+    private static func noteBaselines(in context: ModelContext) {
+        guard let routines = try? context.fetch(FetchDescriptor<ScheduledRoutine>()) else { return }
+        for routine in routines where lastSeen[routine.uuid] == nil {
+            lastSeen[routine.uuid] = signature(of: routine)
+        }
+    }
+
+    /// Makes an edit reach today's occurrence when the routine has already
+    /// armed it. Returns true when the routine was made eligible to arm again.
+    ///
+    /// Two cases, both reported as "I edited it and nothing started counting
+    /// down":
+    ///
+    /// - **Armed, run since stopped or finished.** `lastArmedDay` makes the
+    ///   occurrence done for the day, so an iqama moved fifteen minutes later
+    ///   changed the routine and started nothing. The only way back was the
+    ///   Start Now swipe, which nothing on screen hints at. An edit now
+    ///   clears the stamp, and the occurrence arms again if its window is
+    ///   open.
+    /// - **Armed, run still waiting to start.** `syncLiveRuns` carries the
+    ///   anchor time and the name across but not the steps, on the reasoning
+    ///   that a run half way through cannot have rows swapped under it. A run
+    ///   that has not begun step 1 has nothing under way, so its steps are
+    ///   replaced with fresh copies of the routine's.
+    ///
+    /// A run that has begun is left alone, as before.
+    @discardableResult
+    private static func applyEdit(to routine: ScheduledRoutine,
+                                  in context: ModelContext,
+                                  calendar: Calendar) -> Bool {
+        let current = signature(of: routine)
+        defer { lastSeen[routine.uuid] = current }
+        guard let previous = lastSeen[routine.uuid], previous != current else { return false }
+
+        if let run = openRun(for: routine, in: context) {
+            guard let plan = run.plan, run.currentIndex == 0,
+                  plan.orderedBlocks.first?.actualStart == nil else { return false }
+            for block in plan.blocks { context.delete(block) }
+            for (index, block) in routine.orderedBlocks.enumerated() {
+                let copy = block.copyForSpawn(order: index)
+                context.insert(copy)
+                copy.plan = plan
+            }
+            if let engine = RunEngineStore.shared.engines[run.uuid] {
+                engine.recomputeSolution()
+                engine.syncLiveActivityAndNotifications()
+            }
+            return false
+        }
+
+        guard routine.lastArmedDay != nil else { return false }
+        routine.lastArmedDay = nil
+        return true
     }
 
     /// Pushes an edit made to a `ScheduledRoutine` onto the run it already
