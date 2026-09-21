@@ -38,7 +38,7 @@ struct WorkWeekView: View {
                 }
 
                 VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
-                    SectionLabel("WEEK")
+                    SectionLabel("Week")
                     InkCard {
                         InkValueRow(title: "Worked", value: WorkHours.clockString(weekSeconds))
                         InkValueRow(title: "Decimal",
@@ -68,7 +68,7 @@ struct WorkWeekView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .scrollIndicators(.hidden)
-        .inkNavigation(title: "WEEK")
+        .inkNavigation(title: "Week")
         .onReceive(ticker) { now = $0 }
     }
 
@@ -188,7 +188,7 @@ private struct WorkDayView: View {
                 // A session that crosses midnight is listed on both days it
                 // touches, so a row's own length and the day's total
                 // legitimately differ.
-                SectionLabel(text: "THIS DAY") {
+                SectionLabel(text: "This day") {
                     Text(WorkHours.clockString(daySeconds))
                         .font(InkType.clock)
                         .monospacedDigit()
@@ -218,7 +218,7 @@ private struct WorkDayView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .scrollIndicators(.hidden)
-        .inkNavigation(title: TimeFormatting.monthDayString(day).uppercased())
+        .inkNavigation(title: TimeFormatting.monthDayString(day))
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 PlusButton { editing = .new(day: day) }

@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// The draggable "chevron capsule" behind `DurationScrubber`, pulled out so
+/// The draggable chevron track behind `DurationScrubber`, pulled out so
 /// other value-scrubbing controls (the Final Time picker's time-of-day
 /// scrub) can reuse the exact same drag-to-scrub feel instead of
 /// duplicating the gesture math.
@@ -23,24 +23,33 @@ struct ScrubTrack: View {
     @State private var dragStartValue = 0
     @State private var lastHapticValue = 0
 
+    @Environment(\.inkOnCard) private var onCard
+
+    /// A 10 pt rounded rectangle with no outline; it was an outlined capsule.
+    /// On a card it starts on the raised surface, since the plain surface
+    /// would be the card's own colour, and the drag is then carried by the
+    /// scale and the chevrons brightening.
+    private var shape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: InkMetric.radius, style: .continuous)
+    }
+
     var body: some View {
         ZStack {
-            Capsule()
-                .fill(isDragging ? OnTimeSpectrum.surfaceRaised : OnTimeSpectrum.surface)
-                .overlay(Capsule().strokeBorder(OnTimeSpectrum.hairline, lineWidth: 1))
+            shape
+                .fill(isDragging || onCard ? OnTimeSpectrum.surfaceRaised : OnTimeSpectrum.surface)
             HStack {
                 Image(systemName: "chevron.left")
                 Spacer()
                 Image(systemName: "chevron.right")
             }
-            .font(.caption.weight(.bold))
+            .font(.caption)
             .foregroundStyle(isDragging ? OnTimeSpectrum.secondaryText : OnTimeSpectrum.tertiaryText)
             .padding(.horizontal, 14)
         }
         .frame(height: 40)
         .scaleEffect(isDragging ? 1.03 : 1.0)
         .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isDragging)
-        .contentShape(Capsule())
+        .contentShape(shape)
         .gesture(
             DragGesture(minimumDistance: 4)
                 .onChanged { drag in

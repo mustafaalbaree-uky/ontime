@@ -33,7 +33,7 @@ struct WorkView: View {
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
                 } center: {
-                    InkBarTitle("WORK")
+                    InkBarTitle("Work")
                 } trailing: {
                     PlusButton { editing = .new(day: Date()) }
                         .accessibilityLabel("Add session by hand")
@@ -86,8 +86,7 @@ struct WorkView: View {
     private var clockFace: some View {
         VStack(spacing: 16) {
             Text(WorkHours.stopwatchString(runningSession?.seconds(now: now) ?? 0))
-                .font(InkType.hero)
-                .monospacedDigit()
+                .onTimeNumeral(InkType.heroSize)
                 .lineLimit(1)
                 .minimumScaleFactor(0.5)
                 .foregroundStyle(runningSession == nil ? OnTimeSpectrum.tertiaryText : OnTimeSpectrum.primaryText)
@@ -103,8 +102,6 @@ struct WorkView: View {
                     now = Date()
                 } label: {
                     Label("Start", systemImage: "play.fill")
-                        .font(InkType.buttonProminent)
-                        .foregroundStyle(OnTimeSpectrum.primaryText)
                 }
                 .buttonStyle(SpectrumButtonStyle())
             } else {
@@ -113,8 +110,6 @@ struct WorkView: View {
                     now = Date()
                 } label: {
                     Label("Stop", systemImage: "stop.fill")
-                        .font(InkType.buttonProminent)
-                        .foregroundStyle(OnTimeSpectrum.primaryText)
                 }
                 .buttonStyle(SpectrumButtonStyle())
             }
@@ -126,7 +121,7 @@ struct WorkView: View {
 
     private var todaySection: some View {
         VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
-            SectionLabel(text: "TODAY") {
+            SectionLabel(text: "Today") {
                 Text(WorkHours.clockString(todaysSeconds))
                     .font(InkType.clock)
                     .monospacedDigit()

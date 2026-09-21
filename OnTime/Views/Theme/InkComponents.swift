@@ -2,13 +2,20 @@ import SwiftUI
 
 /// The pieces every screen is built from.
 ///
-/// The app has one look: true black ground, content as hairline cards, three
-/// whites for hierarchy, and colour only where colour is a signal. Before
-/// this file existed the Now screen had that look and every other screen was
-/// a system `List` or `Form`, which on a forced dark scheme renders grey
-/// panels, grey section headers and a cyan tint on every value. These are the
-/// Now screen's own rows and labels, lifted out so the rest of the app is
-/// built from the same parts rather than resembling them.
+/// The app has one look: true black ground, content as filled cards with no
+/// outline, three whites for hierarchy, and colour only where colour is a
+/// signal. Before this file existed the Now screen had its own look and every
+/// other screen was a system `List` or `Form`, which on a forced dark scheme
+/// renders grey panels, grey section headers and a cyan tint on every value.
+/// These are the Now screen's own rows and labels, lifted out so the rest of
+/// the app is built from the same parts rather than resembling them.
+///
+/// The type and the shapes are look A, "Instrument", picked from three
+/// mockups on 21 Sep 2026. The look before it was SF Rounded in bold and
+/// heavy, an outline on every box, 18 pt corners, circles and capsules, and
+/// tracked capital labels; the owner called it a toy. So: SF Pro, regular
+/// weight, medium at the very most, thin large numerals, sentence case, 10 pt
+/// corners, and a fill where there used to be a stroke.
 ///
 /// `Shared/OnTimeSpectrum.swift` holds the colours (the widget compiles that
 /// too). Everything here is app only.
@@ -16,21 +23,34 @@ import SwiftUI
 // MARK: - Type scale
 
 /// The whole type scale, by name, so a row somewhere does not quietly invent
-/// a fourth size.
+/// a fourth size. Everything is SF Pro at regular weight; the one medium is
+/// the text of a primary button. Nothing is bold, nothing is rounded.
+///
+/// Text styles rather than fixed sizes, so Dynamic Type still works: footnote
+/// is 13 pt, subheadline 15, callout 16 at the default setting.
 enum InkType {
-    static let label = Font.caption.weight(.bold)
-    static let labelSmall = Font.caption2.weight(.bold)
-    static let hero = Font.system(size: 62, weight: .bold, design: .rounded)
-    static let display = Font.system(size: 52, weight: .heavy, design: .rounded)
-    static let number = Font.system(size: 30, weight: .bold, design: .rounded)
-    static let value = Font.title3.weight(.bold)
-    static let rowTitle = Font.body.weight(.semibold)
-    static let rowMeta = Font.caption
+    /// Section labels, toolbar actions beside them, chevrons.
+    static let label = Font.footnote
+    /// The caption over a number inside a card.
+    static let labelSmall = Font.caption
+    /// A pushed screen's title and a tab root's top bar.
+    static let title = Font.callout
+    static let value = Font.callout
+    static let rowTitle = Font.callout
+    static let rowMeta = Font.footnote
     static let bodyText = Font.subheadline
-    static let buttonProminent = Font.headline
-    static let buttonQuiet = Font.subheadline.weight(.semibold)
-    static let chip = Font.caption.weight(.bold)
-    static let clock = Font.caption.weight(.semibold)
+    static let buttonProminent = Font.callout.weight(.medium)
+    static let buttonQuiet = Font.subheadline
+    static let chip = Font.footnote
+    static let clock = Font.footnote
+
+    /// The three numeral sizes. A number takes one through
+    /// `onTimeNumeral(_:)` (in `Shared/OnTimeSpectrum.swift`, so the widget
+    /// sets its numbers by the same rule), which picks thin for the two large
+    /// ones and light for `numberSize`, and tightens the tracking.
+    static let heroSize: CGFloat = 62
+    static let displaySize: CGFloat = 52
+    static let numberSize: CGFloat = 30
 }
 
 // MARK: - Metrics
@@ -44,16 +64,37 @@ enum InkMetric {
     static let rowPadding: CGFloat = 14
     static let heroPadding: CGFloat = 20
     static let rowMinHeight: CGFloat = 48
-    static let radius: CGFloat = 18
-    static let innerRadius: CGFloat = 12
+    /// Cards and buttons.
+    static let radius: CGFloat = 10
+    /// Anything that sits inside a card.
+    static let innerRadius: CGFloat = 8
+    /// Step pips and the step strip: one height, whichever step is current.
+    static let pipHeight: CGFloat = 3
+}
+
+// MARK: - Environment
+
+private struct InkOnCardKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    /// True for anything drawn inside a card. `spectrumCard` sets it. A chip
+    /// or a step row reads it to pick its fill: `surface` on the black ground,
+    /// `surfaceRaised` on a card, where `surface` on `surface` would vanish.
+    var inkOnCard: Bool {
+        get { self[InkOnCardKey.self] }
+        set { self[InkOnCardKey.self] = newValue }
+    }
 }
 
 // MARK: - Labels and titles
 
-/// The section label: the line of small bold uppercase text that sits on the
+/// The section label: the line of small sentence case text that sits on the
 /// ink above a card, with an optional action at the trailing end of the same
 /// row. Every section has one of these. No screen has a large navigation
-/// title.
+/// title. Callers pass it in sentence case ("Final time"); it used to be bold,
+/// uppercase and tracked, which was the loudest part of the old look.
 struct SectionLabel<Trailing: View>: View {
     var text: String
     @ViewBuilder var trailing: () -> Trailing
@@ -62,7 +103,6 @@ struct SectionLabel<Trailing: View>: View {
         HStack(spacing: 14) {
             Text(text)
                 .font(InkType.label)
-                .tracking(1.5)
                 .foregroundStyle(OnTimeSpectrum.secondaryText)
             Spacer(minLength: 0)
             trailing()
@@ -77,8 +117,9 @@ extension SectionLabel where Trailing == EmptyView {
 }
 
 /// A pushed screen's or a sheet's title, supplied as the principal toolbar
-/// item so it reads as a section label rather than as a system navigation
-/// title. Callers pass it already uppercased.
+/// item so it is set in the app's own type rather than as a system navigation
+/// title, which is semibold. Callers pass it in sentence case, and a name the
+/// user typed exactly as typed.
 struct InkTitle: View {
     var text: String
 
@@ -86,9 +127,9 @@ struct InkTitle: View {
 
     var body: some View {
         Text(text)
-            .font(InkType.label)
-            .tracking(1.5)
-            .foregroundStyle(OnTimeSpectrum.secondaryText)
+            .font(InkType.title)
+            .foregroundStyle(OnTimeSpectrum.primaryText)
+            .lineLimit(1)
     }
 }
 
@@ -100,9 +141,8 @@ struct InkBarTitle: View {
 
     var body: some View {
         Text(text)
-            .font(InkType.label)
-            .tracking(2)
-            .foregroundStyle(OnTimeSpectrum.secondaryText)
+            .font(InkType.title)
+            .foregroundStyle(OnTimeSpectrum.primaryText)
     }
 }
 
@@ -137,19 +177,16 @@ extension TopBar where Leading == EmptyView, Center == InkBarTitle, Trailing == 
 
 // MARK: - Cards and rows
 
-/// A hairline between two rows of a card, inset from the leading edge so the
-/// rows read as one stack rather than as separate plates.
+/// The 1 px rule between two rows of a card, the full width of the card.
 struct InkHairline: View {
     var body: some View {
         Rectangle()
-            .fill(OnTimeSpectrum.hairline)
+            .fill(OnTimeSpectrum.rule)
             .frame(height: 1)
-            .padding(.leading, InkMetric.rowPadding)
     }
 }
 
-/// A card holding a vertical stack of rows, with a hairline between each
-/// pair. `_VariadicView` is what makes "between each pair" possible: a plain
+/// A card holding a vertical stack of rows, with a rule between each pair. `_VariadicView` is what makes "between each pair" possible: a plain
 /// `VStack` cannot see its own children, so the alternative is every caller
 /// interleaving separators by hand and getting one wrong.
 struct InkCard<Content: View>: View {
@@ -251,8 +288,11 @@ struct InkToggleRow: View {
     }
 }
 
-/// Title, value, and two circles. Not a system `Stepper`: that draws a grey
-/// segmented plate that belongs to a `Form`.
+/// Title, value, and a round minus and plus filled with the raised surface.
+/// These two, the Stop button and the page dots are the only round controls
+/// the app draws itself.
+/// Not a system `Stepper`: that draws a grey segmented plate that belongs to
+/// a `Form`.
 struct InkStepperRow: View {
     var title: String
     @Binding var value: Int
@@ -292,10 +332,10 @@ struct InkStepperRow: View {
     private func circle(_ symbol: String, enabled: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.subheadline.weight(.bold))
+                .font(.subheadline)
                 .foregroundStyle(OnTimeSpectrum.primaryText)
-                .frame(width: 32, height: 32)
-                .background(Circle().strokeBorder(OnTimeSpectrum.edge, lineWidth: 1))
+                .frame(width: 30, height: 30)
+                .background(Circle().fill(OnTimeSpectrum.surfaceRaised))
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
@@ -380,7 +420,7 @@ struct InkTextRow: View {
                     TextField("", text: $text, prompt: prompt)
                 }
             }
-            .font(.body)
+            .font(InkType.rowTitle)
             .foregroundStyle(OnTimeSpectrum.primaryText)
             .tint(OnTimeSpectrum.primaryText)
             .textInputAutocapitalization(autocapitalization)
@@ -428,30 +468,52 @@ struct InkEmpty: View {
 
 // MARK: - Small controls
 
-/// The "+" that adds a row to the section its label sits above.
+/// The "+" that adds a row to the section its label sits above. A bare light
+/// glyph, as the mockup drew it: it used to sit in an outlined circle. The
+/// padding is the tap target, not decoration.
 struct PlusButton: View {
     var action: () -> Void
 
     var body: some View {
         Button(action: action) {
             Image(systemName: "plus")
-                .font(.headline)
+                .font(.system(size: 20, weight: .light))
                 .foregroundStyle(OnTimeSpectrum.primaryText)
                 .padding(9)
-                .background(Circle().strokeBorder(OnTimeSpectrum.edge, lineWidth: 1))
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
 }
 
-/// A capsule chip. Filled ones carry a value; outlined ones are the Add
-/// affordance beside a row of them.
+/// A chip: a 10 pt rounded rectangle, never a capsule, never outlined.
+///
+/// `filled` carries a value you can tap (a shortcut, a saved place).
+/// `quiet` is the Add affordance beside a row of them. `unselected` and
+/// `selected` are the two states of a `ChipPicker` option: dim on the
+/// surface, and black on white.
 struct Chip: View {
-    enum Style { case filled, outlined, selected }
+    enum Style { case filled, quiet, unselected, selected }
 
     var text: String
     var systemImage: String? = nil
     var style: Style = .filled
+
+    @Environment(\.inkOnCard) private var onCard
+
+    private var foreground: Color {
+        switch style {
+        case .filled: return OnTimeSpectrum.primaryText
+        case .quiet: return OnTimeSpectrum.secondaryText
+        case .unselected: return OnTimeSpectrum.tertiaryText
+        case .selected: return OnTimeSpectrum.ink
+        }
+    }
+
+    private var fill: Color {
+        if style == .selected { return OnTimeSpectrum.primaryText }
+        return onCard ? OnTimeSpectrum.surfaceRaised : OnTimeSpectrum.surface
+    }
 
     var body: some View {
         HStack(spacing: 4) {
@@ -461,20 +523,10 @@ struct Chip: View {
             Text(text)
         }
         .font(InkType.chip)
-        .foregroundStyle(style == .selected ? OnTimeSpectrum.ink : OnTimeSpectrum.primaryText)
+        .foregroundStyle(foreground)
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background {
-            switch style {
-            case .filled:
-                Capsule().fill(OnTimeSpectrum.surface)
-                    .overlay(Capsule().strokeBorder(OnTimeSpectrum.hairline))
-            case .outlined:
-                Capsule().strokeBorder(OnTimeSpectrum.edge, lineWidth: 1)
-            case .selected:
-                Capsule().fill(OnTimeSpectrum.primaryText)
-            }
-        }
+        .padding(.vertical, 9)
+        .background(fill, in: RoundedRectangle(cornerRadius: InkMetric.radius, style: .continuous))
     }
 }
 
@@ -490,7 +542,8 @@ struct ChipOption<Value: Hashable>: Identifiable {
     }
 }
 
-/// The app's picker: a row of chips, the selected one filled white. Replaces
+/// The app's picker: a row of chips, the selected one filled white and the
+/// rest dim. Replaces
 /// every system `Picker`, which renders as a grey menu button with a cyan
 /// value.
 struct ChipPicker<Value: Hashable>: View {
@@ -505,7 +558,7 @@ struct ChipPicker<Value: Hashable>: View {
                         selection = option.value
                     } label: {
                         Chip(text: option.label,
-                             style: option.value == selection ? .selected : .filled)
+                             style: option.value == selection ? .selected : .unselected)
                     }
                     .buttonStyle(.plain)
                 }
@@ -538,20 +591,9 @@ struct WeekdayChips: View {
                         .font(InkType.chip)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 10)
-                        .background {
-                            if on {
-                                RoundedRectangle(cornerRadius: InkMetric.innerRadius, style: .continuous)
-                                    .fill(OnTimeSpectrum.primaryText)
-                            } else {
-                                RoundedRectangle(cornerRadius: InkMetric.innerRadius, style: .continuous)
-                                    .fill(OnTimeSpectrum.surface)
-                                    .overlay {
-                                        RoundedRectangle(cornerRadius: InkMetric.innerRadius, style: .continuous)
-                                            .strokeBorder(OnTimeSpectrum.hairline, lineWidth: 1)
-                                    }
-                            }
-                        }
-                        .foregroundStyle(on ? OnTimeSpectrum.ink : OnTimeSpectrum.primaryText)
+                        .background(on ? OnTimeSpectrum.primaryText : OnTimeSpectrum.surface,
+                                    in: RoundedRectangle(cornerRadius: InkMetric.radius, style: .continuous))
+                        .foregroundStyle(on ? OnTimeSpectrum.ink : OnTimeSpectrum.tertiaryText)
                 }
                 .buttonStyle(.plain)
             }
@@ -566,14 +608,19 @@ enum StepRowState {
     case upcoming, current, done
 }
 
-/// One step of a sequence, as a card. The composer, the routine editor and
-/// the run screen all draw the same row: a symbol in a fixed column, the
-/// name, a meta line, whatever the screen wants on the right, and a rail at
-/// the leading edge saying where the step is in the run.
+/// One step of a sequence. The composer, the routine editor and the run
+/// screen all draw the same row: a symbol in a fixed column, the name, a meta
+/// line, and whatever the screen wants on the right.
 ///
-/// Colour on it is a signal and nothing else. The rail used to take a hue
-/// from the step's index, which drew the first step of every sequence in the
-/// exact red this app reserves for running late.
+/// A sequence is one card: the screens put their step rows inside an
+/// `InkCard`, which rules them apart, and the row then draws no plate of its
+/// own. Outside a card (the Active tab, one row per run) it is its own card.
+/// It used to be an outlined card per step with a rail down its leading edge.
+///
+/// The step you are on marks itself with the raised surface. That was a
+/// brighter outline, and nothing has an outline now. Colour on the row is a
+/// signal and nothing else: the symbol turns `done` green once a step is
+/// finished, and a problem is `late`.
 struct StepRowCard<Trailing: View>: View {
     var symbol: String
     var name: String
@@ -583,6 +630,8 @@ struct StepRowCard<Trailing: View>: View {
     var problem: String? = nil
     var onDelete: (() -> Void)? = nil
     @ViewBuilder var trailing: () -> Trailing
+
+    @Environment(\.inkOnCard) private var onCard
 
     private var symbolColor: Color {
         switch state {
@@ -596,15 +645,7 @@ struct StepRowCard<Trailing: View>: View {
         state == .done ? OnTimeSpectrum.secondaryText : OnTimeSpectrum.primaryText
     }
 
-    private var railColor: Color {
-        switch state {
-        case .upcoming: return Color.white.opacity(0.18)
-        case .current: return Color.white.opacity(0.85)
-        case .done: return OnTimeSpectrum.done.opacity(0.5)
-        }
-    }
-
-    var body: some View {
+    private var row: some View {
         HStack(spacing: 12) {
             Image(systemName: symbol)
                 .foregroundStyle(symbolColor)
@@ -621,7 +662,7 @@ struct StepRowCard<Trailing: View>: View {
                 }
                 if let problem {
                     Text(problem)
-                        .font(.caption2)
+                        .font(InkType.labelSmall)
                         .foregroundStyle(OnTimeSpectrum.late)
                 }
             }
@@ -641,12 +682,17 @@ struct StepRowCard<Trailing: View>: View {
             }
         }
         .padding(InkMetric.rowPadding)
-        .spectrumCard(highlighted: state == .current)
-        .overlay(alignment: .leading) {
-            RoundedRectangle(cornerRadius: 2)
-                .fill(railColor)
-                .frame(width: 3)
-                .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    var body: some View {
+        if onCard {
+            row
+                .background(state == .current ? OnTimeSpectrum.surfaceRaised : Color.clear)
+                .contentShape(Rectangle())
+        } else {
+            row.spectrumCard(fill: state == .current ? OnTimeSpectrum.surfaceRaised
+                                                     : OnTimeSpectrum.surface)
         }
     }
 }
@@ -663,7 +709,8 @@ extension StepRowCard where Trailing == EmptyView {
     }
 }
 
-/// The trailing slot most step rows want: a number in `value` style.
+/// The trailing slot most step rows want: a number in `value` style, regular
+/// weight like the rest of the row.
 struct StepRowValue: View {
     var text: String
     var color: Color = OnTimeSpectrum.primaryText
@@ -678,7 +725,7 @@ struct StepRowValue: View {
                 .foregroundStyle(color)
             if let caption {
                 Text(caption)
-                    .font(.caption2.weight(.semibold))
+                    .font(InkType.labelSmall)
                     .foregroundStyle(captionColor)
             }
         }
@@ -708,8 +755,8 @@ extension View {
                                       bottom: 5, trailing: InkMetric.page))
     }
 
-    /// A pushed screen's or a sheet's navigation bar: black, hairline, and a
-    /// section label where the system would put a title.
+    /// A pushed screen's or a sheet's navigation bar: black, hairline, and an
+    /// `InkTitle` where the system would put its own semibold title.
     func inkNavigation(title: String) -> some View {
         self
             .spectrumBackground()

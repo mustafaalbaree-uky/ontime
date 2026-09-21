@@ -15,7 +15,7 @@ struct CountdownsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            TopBar(title: "ACTIVE")
+            TopBar(title: "Active")
 
             ScrollView {
                 VStack(alignment: .leading, spacing: InkMetric.cardToCard) {

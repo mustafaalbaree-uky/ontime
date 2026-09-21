@@ -17,7 +17,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                TopBar(title: "SETTINGS")
+                TopBar(title: "Settings")
 
                 ScrollView {
                     VStack(alignment: .leading, spacing: InkMetric.section) {
@@ -50,7 +50,7 @@ struct SettingsView: View {
     // MARK: - Sections
 
     private var permissionSection: some View {
-        section("NOTIFICATIONS") {
+        section("Notifications") {
             InkTextLine(text: "Notifications are off for OnTime.",
                         color: OnTimeSpectrum.waiting, font: InkType.bodyText)
             InkButtonRow(title: "Open iOS Settings") {
@@ -66,7 +66,7 @@ struct SettingsView: View {
     /// on screen, so the line under the card says what a step gets.
     private var estimatesSection: some View {
         VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
-            SectionLabel("ESTIMATES")
+            SectionLabel("Estimates")
             InkCard {
                 InkToggleRow(title: "Longer learned estimates", isOn: $settings.confidenceIsSafe)
             }
@@ -79,14 +79,14 @@ struct SettingsView: View {
     }
 
     private var runningSection: some View {
-        section("RUNNING") {
+        section("Running") {
             InkToggleRow(title: "Auto advance steps", isOn: $settings.autoAdvanceEnabled)
             InkToggleRow(title: "Last step on top", isOn: $settings.sequenceNewestFirst)
         }
     }
 
     private var notificationsSection: some View {
-        section("NOTIFICATIONS") {
+        section("Notifications") {
             InkToggleRow(title: "Sound", isOn: $settings.notificationSoundEnabled)
             InkToggleRow(title: "Early warning per step", isOn: $settings.leadWarningsEnabled)
             // The minutes mean nothing while the warning is off.
@@ -99,7 +99,7 @@ struct SettingsView: View {
 
     private var stepsSection: some View {
         VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
-            SectionLabel("STEPS")
+            SectionLabel("Steps")
             InkCard {
                 NavigationLink {
                     LearnedStepsView()
@@ -113,7 +113,7 @@ struct SettingsView: View {
 
     private var travelSection: some View {
         VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
-            SectionLabel("TRAVEL")
+            SectionLabel("Travel")
             InkCard {
                 NavigationLink {
                     PlacesView()
@@ -126,7 +126,7 @@ struct SettingsView: View {
     }
 
     private var walksSection: some View {
-        section("WALKS") {
+        section("Walks") {
             InkStepperRow(title: "Safety margin", value: $settings.walkSafetyPercent,
                           range: 0...50, step: 5, unit: "%")
             InkStepperRow(title: "Heads up", value: $settings.walkHeadsUpMinutes,
@@ -139,7 +139,7 @@ struct SettingsView: View {
     /// every time it appears), so they sit behind the developer switch with
     /// the rest.
     private var developerSection: some View {
-        section("DEVELOPER") {
+        section("Developer") {
             InkToggleRow(title: "Developer mode", isOn: $settings.developerModeEnabled)
             if settings.developerModeEnabled {
                 InkValueRow(title: "GPS",
@@ -171,7 +171,7 @@ struct SettingsView: View {
     }
 
     private var aboutSection: some View {
-        section("ABOUT") {
+        section("About") {
             InkValueRow(title: "Build", value: buildStamp,
                         valueColor: OnTimeSpectrum.secondaryText)
         }

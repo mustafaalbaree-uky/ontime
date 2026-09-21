@@ -44,17 +44,15 @@ struct WalkCard: View {
 
     private var header: some View {
         HStack {
-            Text("STEP \(engine.run.currentIndex + 1) OF \(engine.blocks.count)")
+            Text("Step \(engine.run.currentIndex + 1) of \(engine.blocks.count)")
                 .font(InkType.label)
-                .tracking(1.5)
                 .foregroundStyle(OnTimeSpectrum.secondaryText)
             Spacer()
             // A phase is not a state worth spending colour on, and the two
             // it used to spend were the blue this app never uses and the
             // green it reserves for finished.
-            Text(isReturning ? "HEADING BACK" : "WALKING OUT")
+            Text(isReturning ? "Heading back" : "Walking out")
                 .font(InkType.label)
-                .tracking(1.5)
                 .foregroundStyle(OnTimeSpectrum.secondaryText)
         }
     }
@@ -65,13 +63,11 @@ struct WalkCard: View {
     private var headline: some View {
         VStack(spacing: 4) {
             if isReturning {
-                Text("HOME BY \(clock(tracker.homeBy))")
+                Text("Home by \(clock(tracker.homeBy))")
                     .font(InkType.labelSmall)
-                    .tracking(1.5)
                     .foregroundStyle(OnTimeSpectrum.secondaryText)
                 Text("Arriving \(clock(tracker.projectedArrival(now: now)))")
-                    .font(InkType.hero)
-                    .monospacedDigit()
+                    .onTimeNumeral(InkType.heroSize)
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
                     .foregroundStyle(arrivalColor)
@@ -83,21 +79,19 @@ struct WalkCard: View {
                 // remaining number is negative, and a negative countdown is
                 // a puzzle to read at exactly the moment there is no
                 // attention to spare for one.
-                Text("TURN AROUND NOW")
-                    .font(InkType.number)
+                Text("Turn around now")
+                    .font(OnTimeSpectrum.numeral(InkType.numberSize))
                     .foregroundStyle(OnTimeSpectrum.late)
                     .multilineTextAlignment(.center)
                 Text("\(minutes(tracker.estimate.seconds)) min back")
                     .font(InkType.bodyText)
                     .foregroundStyle(OnTimeSpectrum.late)
             } else {
-                Text("TURN BACK IN")
+                Text("Turn back in")
                     .font(InkType.labelSmall)
-                    .tracking(1.5)
                     .foregroundStyle(OnTimeSpectrum.secondaryText)
                 Text(countdown(slack))
-                    .font(InkType.hero)
-                    .monospacedDigit()
+                    .onTimeNumeral(InkType.heroSize)
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
                     .foregroundStyle(slack < 300 ? OnTimeSpectrum.waiting : OnTimeSpectrum.primaryText)
@@ -120,15 +114,14 @@ struct WalkCard: View {
 
     private var columnRule: some View {
         Rectangle()
-            .fill(OnTimeSpectrum.hairline)
+            .fill(OnTimeSpectrum.rule)
             .frame(width: 1, height: 26)
     }
 
     private func fact(_ label: String, value: String) -> some View {
         VStack(spacing: 2) {
-            Text(label.uppercased())
+            Text(label)
                 .font(InkType.labelSmall)
-                .tracking(1.5)
                 .foregroundStyle(OnTimeSpectrum.secondaryText)
             Text(value)
                 .font(InkType.value)
@@ -208,8 +201,6 @@ struct WalkCard: View {
                     tracker.markOutbound()
                 } label: {
                     Label("Still Out", systemImage: "arrow.uturn.backward")
-                        .font(InkType.buttonQuiet)
-                        .foregroundStyle(OnTimeSpectrum.primaryText)
                 }
                 .buttonStyle(SpectrumButtonStyle(prominent: false))
             } else {
@@ -217,10 +208,11 @@ struct WalkCard: View {
                     tracker.markReturning()
                 } label: {
                     Label("Heading Back", systemImage: "arrow.uturn.left")
-                        .font(InkType.buttonProminent)
-                        .foregroundStyle(OnTimeSpectrum.primaryText)
                 }
-                .buttonStyle(SpectrumButtonStyle(edge: mustTurnBack ? OnTimeSpectrum.late : nil))
+                // Past the turnaround this button used to wear a `late`
+                // outline. Buttons have no outline now; the card's red fill
+                // and the red headline above already say it.
+                .buttonStyle(SpectrumButtonStyle())
             }
 
             // The map owns the turn by turn; this app owns the deadline.
@@ -231,8 +223,6 @@ struct WalkCard: View {
                 openInMaps()
             } label: {
                 Label("Route", systemImage: "map")
-                    .font(InkType.buttonQuiet)
-                    .foregroundStyle(OnTimeSpectrum.primaryText)
             }
             .buttonStyle(SpectrumButtonStyle(prominent: false))
             .disabled(tracker.homeCoordinate == nil)

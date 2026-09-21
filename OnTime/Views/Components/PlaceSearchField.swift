@@ -28,6 +28,8 @@ struct PlaceSearchField: View {
 
     private var settings: AppSettings { .shared }
 
+    @Environment(\.inkOnCard) private var onCard
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -35,7 +37,7 @@ struct PlaceSearchField: View {
                     .foregroundStyle(OnTimeSpectrum.secondaryText)
                 TextField("", text: $query, prompt: Text(label)
                     .foregroundColor(OnTimeSpectrum.tertiaryText))
-                    .font(.body)
+                    .font(InkType.rowTitle)
                     .foregroundStyle(OnTimeSpectrum.primaryText)
                     .tint(OnTimeSpectrum.primaryText)
                     .onChange(of: query) { _, newValue in
@@ -131,7 +133,7 @@ struct PlaceSearchField: View {
                     ForEach(Array(completer.results.enumerated()), id: \.element) { index, result in
                         if index > 0 {
                             Rectangle()
-                                .fill(OnTimeSpectrum.hairline)
+                                .fill(OnTimeSpectrum.rule)
                                 .frame(height: 1)
                         }
                         Button {
@@ -155,12 +157,10 @@ struct PlaceSearchField: View {
                         .buttonStyle(.plain)
                     }
                 }
-                .background(OnTimeSpectrum.surface)
+                // No outline. The field is a row of a card, so the results sit
+                // one surface up from it.
+                .background(onCard ? OnTimeSpectrum.surfaceRaised : OnTimeSpectrum.surface)
                 .clipShape(RoundedRectangle(cornerRadius: InkMetric.innerRadius, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: InkMetric.innerRadius, style: .continuous)
-                        .strokeBorder(OnTimeSpectrum.hairline, lineWidth: 1)
-                }
             }
         }
         .padding(InkMetric.rowPadding)

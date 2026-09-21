@@ -28,12 +28,11 @@ struct TemplateDetailView: View {
     /// swipe to delete. Every row in it is a card, so it reads the same.
     var body: some View {
         List {
-            sectionLabelRow("LEARNED", first: true)
+            sectionLabelRow("Learned", first: true)
 
             VStack(spacing: InkMetric.cardToCard) {
                 Text("\(learnedEstimate) min")
-                    .font(InkType.number)
-                    .monospacedDigit()
+                    .onTimeNumeral(InkType.numberSize)
                     .foregroundStyle(OnTimeSpectrum.primaryText)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 18)
@@ -51,7 +50,7 @@ struct TemplateDetailView: View {
             }
             .inkListRow()
 
-            sectionLabelRow("KIND")
+            sectionLabelRow("Kind")
 
             ChipPicker(options: kindOptions, selection: Binding(
                 get: { template.kind },
@@ -59,7 +58,7 @@ struct TemplateDetailView: View {
             ))
             .inkListRow()
 
-            sectionLabelRow("HISTORY · \(template.samples.count)")
+            sectionLabelRow("History · \(template.samples.count)")
 
             if sortedSamples.isEmpty {
                 InkEmpty("No samples.")
@@ -85,7 +84,7 @@ struct TemplateDetailView: View {
             .inkListRow()
         }
         .inkList()
-        .inkNavigation(title: template.name.uppercased())
+        .inkNavigation(title: template.name)
         .sheet(isPresented: $showingAddSample) {
             addSampleSheet
         }
@@ -133,7 +132,7 @@ struct TemplateDetailView: View {
                 .padding(.top, InkMetric.labelToCard)
             }
             .scrollIndicators(.hidden)
-            .inkNavigation(title: "ADD SAMPLE")
+            .inkNavigation(title: "Add sample")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { showingAddSample = false }

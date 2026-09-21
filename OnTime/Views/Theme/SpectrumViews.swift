@@ -54,37 +54,39 @@ struct TimeBar: View {
     /// Nothing else, deliberately — a green-to-red ramp here would be a
     /// second signal saying what the number already says.
     var tint: Color = OnTimeSpectrum.primaryText
-    var height: CGFloat = 6
+    var height: CGFloat = InkMetric.pipHeight
 
     private var remaining: Double { min(max(1 - fraction, 0), 1) }
 
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .leading) {
-                Capsule().fill(Color.white.opacity(0.10))
-                Capsule()
+                Rectangle().fill(Color.white.opacity(0.12))
+                Rectangle()
                     .fill(tint)
                     .frame(width: proxy.size.width * remaining)
             }
         }
         .frame(height: height)
+        .clipShape(RoundedRectangle(cornerRadius: height / 2))
         .animation(.easeInOut(duration: 0.4), value: remaining)
         .accessibilityHidden(true)
     }
 }
 
-/// Text filled with the moving spectrum. Used on exactly one thing per
-/// screen: the number the screen is about.
+/// Text filled with the moving spectrum. Used on exactly one thing in the
+/// product: the composer's Final Time number. It is set like every other
+/// large numeral (`onTimeNumeral`: thin, tight, fixed width digits), so the
+/// fill is the only thing that sets it apart.
 struct SpectrumText: View {
     var text: String
-    var font: Font
+    var size: CGFloat
     /// Late numbers are not decorated. Red means red.
     var isLate: Bool = false
 
     var body: some View {
         Text(text)
-            .font(font)
-            .monospacedDigit()
+            .onTimeNumeral(size)
             .foregroundStyle(.clear)
             .overlay {
                 Group {
@@ -110,8 +112,7 @@ struct SpectrumText: View {
             }
             .mask {
                 Text(text)
-                    .font(font)
-                    .monospacedDigit()
+                    .onTimeNumeral(size)
             }
     }
 }
@@ -143,34 +144,30 @@ struct SpectrumPageDots: View {
     }
 }
 
-/// A card on the ink: barely-there fill, hairline edge, generous radius.
+/// A card on the ink: a filled surface with a 10 pt corner and no stroke.
+///
+/// It was a barely there fill inside a hairline outline with an 18 pt corner,
+/// and the outline on every box was half of what made the app read as a toy.
+/// The fill alone separates a card from the black now. `highlighted` is gone
+/// with the outline it brightened: the current step marks itself with
+/// `surfaceRaised` instead (see `StepRowCard`).
 struct SpectrumCard: ViewModifier {
-    var highlighted: Bool = false
     /// Defaults to the one card fill. The walk card turns it `late` at 10%
-    /// once you have to turn around, which is the only place a card's fill
-    /// carries a state.
+    /// once you have to turn around, and the current step's row passes
+    /// `surfaceRaised`; nothing else changes a card's fill.
     var fill: Color = OnTimeSpectrum.surface
 
     func body(content: Content) -> some View {
         content
+            .environment(\.inkOnCard, true)
             .background(fill)
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay {
-                // A plain white edge, not a spectrum one. The rainbow border
-                // marked the current step during a run, on a screen whose
-                // whole job is to be readable at a glance while you are busy
-                // doing the step it is describing.
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .strokeBorder(highlighted ? Color.white.opacity(0.45) : Color.white.opacity(0.12),
-                                  lineWidth: highlighted ? 1.5 : 1)
-            }
+            .clipShape(RoundedRectangle(cornerRadius: InkMetric.radius, style: .continuous))
     }
 }
 
 extension View {
-    func spectrumCard(highlighted: Bool = false,
-                      fill: Color = OnTimeSpectrum.surface) -> some View {
-        modifier(SpectrumCard(highlighted: highlighted, fill: fill))
+    func spectrumCard(fill: Color = OnTimeSpectrum.surface) -> some View {
+        modifier(SpectrumCard(fill: fill))
     }
 
     /// The app's ground. Applied once per screen.
@@ -179,33 +176,33 @@ extension View {
     }
 }
 
-/// A button on the ink: a lifted plate with a plain white edge, brighter for
-/// the affirmative one.
+/// A button on the ink. The affirmative one is a white plate with black text
+/// at medium weight; the quiet one is the raised surface with white text.
+/// Neither has an outline, and both press in slightly.
+///
+/// The style sets the label's colour, so a call site must not put its own
+/// white `foregroundStyle` on a prominent button's label: that is white text
+/// on a white plate. Secondary text inside a prominent label is
+/// `OnTimeSpectrum.ink` at an opacity, not one of the three whites.
 ///
 /// It does **not** wear the spectrum, and that is the correction to a pass
-/// that put a rainbow border on every button on the screen. One rainbow per
-/// screen means one: the Final Time number on the composer, the ring on a
-/// live run. A gradient on the Start button, the Steps button, the Stop
-/// button, the "+" and the shortcut chips all at once is not more of the
-/// look, it is the end of it — nothing is emphasised when everything is, and
-/// the colour stops being able to mean anything.
+/// that put a rainbow border on every button on the screen. The Final Time
+/// number on the composer is the one spectrum element in the product; a
+/// gradient on the Start button, the Steps button, the Stop button, the "+"
+/// and the shortcut chips all at once is not more of the look, it is the end
+/// of it. Nothing is emphasised when everything is.
 struct SpectrumButtonStyle: ButtonStyle {
     var prominent: Bool = true
-    /// Overrides the plain white edge. Only the walk card uses it, to put
-    /// `late` around Heading Back once you are past the turnaround.
-    var edge: Color? = nil
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
+            .font(prominent ? InkType.buttonProminent : InkType.buttonQuiet)
+            .foregroundStyle(prominent ? OnTimeSpectrum.ink : OnTimeSpectrum.primaryText)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 16)
-            .background(prominent ? Color.white.opacity(0.10) : Color.white.opacity(0.04))
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .strokeBorder(edge ?? Color.white.opacity(prominent ? 0.38 : 0.14),
-                                  lineWidth: prominent ? 1.5 : 1)
-            }
+            .padding(.vertical, 15)
+            .background(prominent ? OnTimeSpectrum.primaryText : OnTimeSpectrum.surfaceRaised)
+            .clipShape(RoundedRectangle(cornerRadius: InkMetric.radius, style: .continuous))
+            .opacity(configuration.isPressed ? 0.8 : 1)
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .animation(.spring(response: 0.25, dampingFraction: 0.7), value: configuration.isPressed)
     }

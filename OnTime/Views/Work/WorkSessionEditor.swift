@@ -66,14 +66,14 @@ struct WorkSessionEditor: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: InkMetric.section) {
                     VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
-                        SectionLabel("START")
+                        SectionLabel("Start")
                         InkCard {
                             dateRow("Started", selection: $start)
                         }
                     }
 
                     VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
-                        SectionLabel("END")
+                        SectionLabel("End")
                         InkCard {
                             InkToggleRow(title: "Still running", isOn: $isRunning)
                                 .disabled(isRunning == false && anotherSessionIsRunning)
@@ -87,7 +87,7 @@ struct WorkSessionEditor: View {
                     }
 
                     VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
-                        SectionLabel("NOTE")
+                        SectionLabel("Note")
                         InkCard {
                             InkTextRow(placeholder: "Note", text: $note, lineLimit: 1...3)
                         }
@@ -113,7 +113,7 @@ struct WorkSessionEditor: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .scrollIndicators(.hidden)
-            .inkNavigation(title: isNew ? "ADD SESSION" : "EDIT SESSION")
+            .inkNavigation(title: isNew ? "Add session" : "Edit session")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }

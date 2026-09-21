@@ -104,7 +104,7 @@ struct NowView: View {
         .sheet(item: $composerRoute) { route in
             switch route {
             case .finalTime:
-                FullScreenTimePicker(title: "Final Time", date: quickDeadlineBinding)
+                FullScreenTimePicker(title: "Final time", date: quickDeadlineBinding)
             case .scheduled:
                 ScheduledRoutinesView()
             case .addShortcut(let initialTime):
@@ -204,18 +204,16 @@ struct NowView: View {
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "chevron.left")
-                    Text(openRuns.count == 1 ? "1 RUNNING" : "\(openRuns.count) RUNNING")
+                    Text(openRuns.count == 1 ? "1 running" : "\(openRuns.count) running")
                 }
-                .font(InkType.label)
-                .tracking(1.5)
+                .font(InkType.title)
                 .foregroundStyle(OnTimeSpectrum.primaryText)
             }
             .buttonStyle(.plain)
         } else {
-            Text(page == composerIndex ? "NOW" : "RUNNING")
-                .font(InkType.label)
-                .tracking(2)
-                .foregroundStyle(OnTimeSpectrum.secondaryText)
+            Text(page == composerIndex ? "Now" : "Running")
+                .font(InkType.title)
+                .foregroundStyle(OnTimeSpectrum.primaryText)
                 .contentTransition(.opacity)
         }
     }

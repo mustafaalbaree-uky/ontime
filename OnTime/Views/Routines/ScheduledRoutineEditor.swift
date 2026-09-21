@@ -90,7 +90,7 @@ struct ScheduledRoutineEditor: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .scrollIndicators(.hidden)
-            .inkNavigation(title: routine.name.isEmpty ? "NEW ROUTINE" : routine.name.uppercased())
+            .inkNavigation(title: routine.name.isEmpty ? "New routine" : routine.name)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
@@ -107,7 +107,7 @@ struct ScheduledRoutineEditor: View {
             .sheet(item: $sheet) { route in
                 switch route {
                 case .anchorTime:
-                    FullScreenTimePicker(title: "Be Done By", date: anchorBinding)
+                    FullScreenTimePicker(title: "Be done by", date: anchorBinding)
                 case .addStep:
                     QuickBlockEditorSheet(
                         existingBlock: nil,
@@ -129,19 +129,18 @@ struct ScheduledRoutineEditor: View {
 
     // MARK: - Sections
 
-    /// The one number. Same weight and place the composer gives Final Time,
-    /// but in plain white: the composer's number is the only spectrum
+    /// The one number. Same thin numeral and place the composer gives Final
+    /// Time, but in plain white: the composer's number is the only spectrum
     /// element in the product.
     private var anchorSection: some View {
         VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
-            SectionLabel("BE DONE BY")
+            SectionLabel("Be done by")
 
             Button {
                 sheet = .anchorTime
             } label: {
                 Text(timeString(hour: routine.anchorHour, minute: routine.anchorMinute))
-                    .font(InkType.display)
-                    .monospacedDigit()
+                    .onTimeNumeral(InkType.displaySize)
                     .foregroundStyle(OnTimeSpectrum.primaryText)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 18)
@@ -153,7 +152,7 @@ struct ScheduledRoutineEditor: View {
 
     private var daysSection: some View {
         VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
-            SectionLabel("DAYS")
+            SectionLabel("Days")
 
             WeekdayChips(weekdays: Binding(
                 get: { routine.weekdays },
@@ -195,7 +194,7 @@ struct ScheduledRoutineEditor: View {
 
     private var sequenceSection: some View {
         VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
-            SectionLabel(text: "THE SEQUENCE") {
+            SectionLabel(text: "The sequence") {
                 HStack(spacing: 14) {
                     if blocks.count > 1 {
                         // Dragging a whole routine end to end, one row at a
@@ -219,22 +218,26 @@ struct ScheduledRoutineEditor: View {
             } else {
                 VStack(spacing: InkMetric.cardToCard) {
                     let starts = stepStarts
-                    ForEach(Array(blocks.enumerated()), id: \.element.uuid) { index, block in
-                        Button {
-                            sheet = .editStep(block)
-                        } label: {
-                            stepRow(block, startsAt: starts[block.uuid])
-                        }
-                        .buttonStyle(.plain)
-                        // Reordering by context menu rather than by a
-                        // permanent drag grip: `editMode` kept every row in
-                        // edit affordances even when nothing was being moved.
-                        .contextMenu {
-                            Button("Move Up") { move(index, by: -1) }
-                                .disabled(index == 0)
-                            Button("Move Down") { move(index, by: 1) }
-                                .disabled(index == blocks.count - 1)
-                            Button("Delete", role: .destructive) { delete(block) }
+                    // One card for the whole sequence, ruled between steps,
+                    // the way the composer draws it.
+                    InkCard {
+                        ForEach(Array(blocks.enumerated()), id: \.element.uuid) { index, block in
+                            Button {
+                                sheet = .editStep(block)
+                            } label: {
+                                stepRow(block, startsAt: starts[block.uuid])
+                            }
+                            .buttonStyle(.plain)
+                            // Reordering by context menu rather than by a
+                            // permanent drag grip: `editMode` kept every row in
+                            // edit affordances even when nothing was being moved.
+                            .contextMenu {
+                                Button("Move Up") { move(index, by: -1) }
+                                    .disabled(index == 0)
+                                Button("Move Down") { move(index, by: 1) }
+                                    .disabled(index == blocks.count - 1)
+                                Button("Delete", role: .destructive) { delete(block) }
+                            }
                         }
                     }
 
@@ -256,9 +259,9 @@ struct ScheduledRoutineEditor: View {
             onDelete: { delete(block) }
         ) {
             if block.kind == .flex {
-                badge("FLEX")
+                badge("Flex")
             } else if block.kind == .walk {
-                badge("WALK")
+                badge("Walk")
             } else {
                 StepRowValue(text: "\(TravelTimeService.shared.manualEstimateMinutes(for: block)) min")
             }
@@ -297,8 +300,7 @@ struct ScheduledRoutineEditor: View {
 
     private func badge(_ text: String) -> some View {
         Text(text)
-            .font(InkType.label)
-            .tracking(1.5)
+            .font(InkType.value)
             .foregroundStyle(OnTimeSpectrum.tertiaryText)
     }
 

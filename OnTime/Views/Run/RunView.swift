@@ -37,7 +37,7 @@ struct RunView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
-            .inkNavigation(title: (plan?.name ?? "Run").uppercased())
+            .inkNavigation(title: plan?.name ?? "Run")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     // Just closes the screen — the run keeps going in the
@@ -157,7 +157,7 @@ struct RunView: View {
                     // an invalid plan (two open-duration steps, most likely)
                     // just blanked every leave-by time with nothing saying why.
                     Label(message, systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption)
+                        .font(InkType.rowMeta)
                         .foregroundStyle(OnTimeSpectrum.waiting)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(14)
@@ -180,7 +180,7 @@ struct RunView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) { upNextBar(engine) }
     }
 
-    /// The plan's deadline, in the same place and the same weight the
+    /// The plan's deadline, in the same place and the same thin numeral the
     /// composer gives it — but in plain white, not the moving spectrum.
     /// The composer keeps the rainbow on its Final Time because building a
     /// sequence is a screen you look at on purpose; this is the same number
@@ -188,11 +188,10 @@ struct RunView: View {
     /// twice.
     private func finalTimeHeader(_ engine: RunEngine) -> some View {
         VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
-            SectionLabel("FINAL TIME")
+            SectionLabel("Final time")
 
             Text(timeString(engine.plan?.deadline ?? Date()))
-                .font(InkType.display)
-                .monospacedDigit()
+                .onTimeNumeral(InkType.displaySize)
                 .foregroundStyle(OnTimeSpectrum.primaryText)
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.vertical, 18)
@@ -200,7 +199,7 @@ struct RunView: View {
 
             if let minutes = engine.latenessMinutes, minutes > 0 {
                 Text("running \(minutes) min past this")
-                    .font(.caption.weight(.semibold))
+                    .font(InkType.rowMeta)
                     .foregroundStyle(OnTimeSpectrum.late)
             }
         }
@@ -208,12 +207,16 @@ struct RunView: View {
 
     private func sequenceSection(_ engine: RunEngine) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            SectionLabel(text: "THE SEQUENCE") {
+            SectionLabel(text: "The sequence") {
                 PlusButton { showingAddStep = true }
             }
 
-            ForEach(Array(blocks.enumerated()), id: \.element.uuid) { index, block in
-                stepRow(engine, block: block, index: index)
+            // One card, ruled between steps. The step you are on is the row
+            // on the raised surface.
+            InkCard {
+                ForEach(Array(blocks.enumerated()), id: \.element.uuid) { index, block in
+                    stepRow(engine, block: block, index: index)
+                }
             }
         }
     }
@@ -242,7 +245,7 @@ struct RunView: View {
         }
     }
 
-    /// No "STEP 2" here: the row's place in the list, its rail and its
+    /// No "Step 2" here: the row's place in the list, its fill and its
     /// symbol already say where it is in the run.
     private func meta(for block: Block) -> [String] {
         var parts: [String] = []
@@ -258,18 +261,18 @@ struct RunView: View {
     @ViewBuilder
     private func stepTrailing(_ engine: RunEngine, block: Block, done: Bool) -> some View {
         if block.kind == .flex {
-            badge("FLEX")
+            badge("Flex")
         } else if block.kind == .walk {
-            badge("WALK")
+            badge("Walk")
         } else if let sched = engine.schedule(for: block) {
             switch sched.constraint {
             case .hardLeaveBy(let date):
                 Text(timeString(date))
-                    .font(.subheadline.monospacedDigit().weight(.semibold))
+                    .font(InkType.value.monospacedDigit())
                     .foregroundStyle(done ? OnTimeSpectrum.tertiaryText : OnTimeSpectrum.primaryText)
             case .flexAbsorbs(let remaining):
                 Text("flex \(Int((remaining / 60.0).rounded()))m")
-                    .font(.subheadline.monospacedDigit().weight(.semibold))
+                    .font(InkType.value.monospacedDigit())
                     .foregroundStyle(OnTimeSpectrum.waiting)
             }
         }
@@ -278,8 +281,7 @@ struct RunView: View {
     /// A kind is not a state, so it is not coloured.
     private func badge(_ text: String) -> some View {
         Text(text)
-            .font(InkType.label)
-            .tracking(1.5)
+            .font(InkType.value)
             .foregroundStyle(OnTimeSpectrum.tertiaryText)
     }
 
@@ -293,31 +295,29 @@ struct RunView: View {
         return VStack(spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(waiting ? "UNTIL START" : "UNTIL \((engine.currentBlock?.name ?? "NEXT").uppercased()) IS DUE")
-                        .font(.caption2.weight(.bold))
-                        .tracking(1.5)
+                    // The step's name as typed, inside a sentence case line.
+                    Text(waiting ? "Until start" : "Until \(engine.currentBlock?.name ?? "next") is due")
+                        .font(InkType.labelSmall)
                         .foregroundStyle(OnTimeSpectrum.secondaryText)
                         .lineLimit(1)
                     if let left {
                         Text((late ? "+" : "") + TimeFormatting.countdownString(abs(left)))
-                            .font(InkType.number)
-                            .monospacedDigit()
+                            .onTimeNumeral(InkType.numberSize)
                             .foregroundStyle(late ? OnTimeSpectrum.late : OnTimeSpectrum.primaryText)
                     } else {
                         Text("…")
-                            .font(InkType.number)
+                            .font(OnTimeSpectrum.numeral(InkType.numberSize))
                             .foregroundStyle(OnTimeSpectrum.tertiaryText)
                     }
                 }
                 Spacer()
                 if let t = target {
                     VStack(alignment: .trailing, spacing: 2) {
-                        Text("AT")
-                            .font(.caption2.weight(.bold))
-                            .tracking(1.5)
+                        Text("At")
+                            .font(InkType.labelSmall)
                             .foregroundStyle(OnTimeSpectrum.secondaryText)
                         Text(timeString(t))
-                            .font(.headline.monospacedDigit())
+                            .font(InkType.value.monospacedDigit())
                             .foregroundStyle(OnTimeSpectrum.secondaryText)
                     }
                 }
@@ -329,8 +329,6 @@ struct RunView: View {
                 Label(waiting ? "Start Step 1 Now"
                       : (run.currentIndex + 1 >= blocks.count ? "Finish" : "Next Step"),
                       systemImage: waiting ? "play.fill" : "checkmark.circle.fill")
-                    .font(.headline)
-                    .foregroundStyle(OnTimeSpectrum.primaryText)
             }
             .buttonStyle(SpectrumButtonStyle())
         }
@@ -352,16 +350,14 @@ struct RunView: View {
         return VStack(spacing: 16) {
             Spacer()
 
-            Text("FINISHED")
+            Text("Finished")
                 .font(InkType.label)
-                .tracking(1.5)
                 .foregroundStyle(OnTimeSpectrum.secondaryText)
 
             if let diff {
                 let minutes = Int((abs(diff) / 60.0).rounded())
                 Text("\(minutes) min \(late ? "late" : "early")")
-                    .font(InkType.hero)
-                    .monospacedDigit()
+                    .onTimeNumeral(InkType.heroSize)
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
                     .foregroundStyle(late ? OnTimeSpectrum.late : OnTimeSpectrum.primaryText)
@@ -384,8 +380,6 @@ struct RunView: View {
                     dismiss()
                 } label: {
                     Text("Done")
-                        .font(InkType.buttonProminent)
-                        .foregroundStyle(OnTimeSpectrum.primaryText)
                 }
                 .buttonStyle(SpectrumButtonStyle())
             }

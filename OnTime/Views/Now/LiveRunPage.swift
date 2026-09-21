@@ -92,10 +92,11 @@ struct LiveRunPage: View {
     private func header(_ engine: RunEngine) -> some View {
         ZStack {
             VStack(spacing: 6) {
-                Text((engine.plan?.name ?? "Run").uppercased())
-                    .font(.caption.weight(.bold))
-                    .tracking(1.5)
-                    .foregroundStyle(OnTimeSpectrum.secondaryText)
+                // As typed. It used to be uppercased, bold and tracked.
+                Text(engine.plan?.name ?? "Run")
+                    .font(InkType.title)
+                    .foregroundStyle(OnTimeSpectrum.primaryText)
+                    .lineLimit(1)
                 // Only when it adds something. A hand-started run is named
                 // "By 12:50 AM", so the old unconditional subtitle rendered
                 // "BY 12:50 AM" directly above "finishing by 12:50 AM" —
@@ -103,7 +104,7 @@ struct LiveRunPage: View {
                 if let deadline = engine.plan?.deadline,
                    engine.plan?.name.contains(TimeFormatting.clockString(deadline)) != true {
                     Text("finishing by \(TimeFormatting.clockString(deadline))")
-                        .font(.caption2)
+                        .font(InkType.labelSmall)
                         .foregroundStyle(OnTimeSpectrum.tertiaryText)
                 }
             }
@@ -114,11 +115,13 @@ struct LiveRunPage: View {
                 Button {
                     confirmingCancel = true
                 } label: {
+                    // One of the few round controls left: a close button is
+                    // a circle everywhere else on the phone.
                     Image(systemName: "xmark")
-                        .font(.caption.weight(.bold))
+                        .font(.caption)
                         .foregroundStyle(OnTimeSpectrum.secondaryText)
                         .padding(9)
-                        .background(Circle().fill(OnTimeSpectrum.surface))
+                        .background(Circle().fill(OnTimeSpectrum.surfaceRaised))
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Stop this run")
@@ -153,7 +156,7 @@ struct LiveRunPage: View {
                 Image(systemName: engine.isWaitingToStart
                       ? "hourglass"
                       : (block?.template?.symbol ?? block?.kind.defaultSymbol ?? "timer"))
-                    .font(.footnote.weight(.semibold))
+                    .font(InkType.label)
                     // Plain, like every other symbol on this screen. It used
                     // to take its hue from the step's index, which made the
                     // first step of a two step sequence render its car icon
@@ -161,10 +164,9 @@ struct LiveRunPage: View {
                     .foregroundStyle(late ? OnTimeSpectrum.late : OnTimeSpectrum.secondaryText)
 
                 Text(engine.isWaitingToStart
-                     ? "UNTIL START"
-                     : (block.map { engine.targetLabel(for: $0).uppercased() } ?? "UNTIL NEXT"))
-                    .font(.caption.weight(.bold))
-                    .tracking(1.4)
+                     ? "Until start"
+                     : (block.map { engine.targetLabel(for: $0) } ?? "Until next"))
+                    .font(InkType.label)
                     .foregroundStyle(late ? OnTimeSpectrum.late : OnTimeSpectrum.secondaryText)
                     .lineLimit(1)
 
@@ -172,7 +174,7 @@ struct LiveRunPage: View {
 
                 if let t = target {
                     Text(TimeFormatting.clockString(t))
-                        .font(.caption.monospacedDigit().weight(.semibold))
+                        .font(InkType.label.monospacedDigit())
                         .foregroundStyle(OnTimeSpectrum.tertiaryText)
                 }
             }
@@ -183,15 +185,14 @@ struct LiveRunPage: View {
                 // same fix the Live Activity got, and the two say the same
                 // thing at the same moment.
                 Text((late ? "+" : "") + TimeFormatting.compactCountdownString(abs(left)))
-                    .font(InkType.hero)
-                    .monospacedDigit()
+                    .onTimeNumeral(InkType.heroSize)
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
                     .foregroundStyle(late ? OnTimeSpectrum.late : OnTimeSpectrum.primaryText)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 Text("…")
-                    .font(InkType.hero)
+                    .font(OnTimeSpectrum.numeral(InkType.heroSize))
                     .foregroundStyle(OnTimeSpectrum.tertiaryText)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -201,14 +202,14 @@ struct LiveRunPage: View {
 
             if let block {
                 Text(block.name)
-                    .font(.subheadline.weight(.semibold))
+                    .font(InkType.rowTitle)
                     .foregroundStyle(OnTimeSpectrum.secondaryText)
                     .lineLimit(1)
             }
 
             if let minutes = engine.latenessMinutes, minutes > 0 {
                 Text("running \(minutes) min past \(TimeFormatting.clockString(engine.plan?.deadline ?? Date()))")
-                    .font(.caption2.weight(.semibold))
+                    .font(InkType.labelSmall)
                     .foregroundStyle(OnTimeSpectrum.late)
             }
         }
@@ -219,7 +220,7 @@ struct LiveRunPage: View {
 
     private func problem(_ message: String) -> some View {
         Text(message)
-            .font(.caption)
+            .font(InkType.rowMeta)
             .foregroundStyle(OnTimeSpectrum.waiting)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(14)
@@ -233,8 +234,6 @@ struct LiveRunPage: View {
                     engine.beginFirstStepNow()
                 } label: {
                     Label("Start Step 1 Now", systemImage: "play.fill")
-                        .font(.headline)
-                        .foregroundStyle(OnTimeSpectrum.primaryText)
                 }
                 .buttonStyle(SpectrumButtonStyle())
             } else {
@@ -243,8 +242,6 @@ struct LiveRunPage: View {
                 } label: {
                     Label(engine.run.currentIndex + 1 >= engine.blocks.count ? "Finish" : "Next Step",
                           systemImage: "checkmark.circle.fill")
-                        .font(.headline)
-                        .foregroundStyle(OnTimeSpectrum.primaryText)
                 }
                 .buttonStyle(SpectrumButtonStyle())
             }
@@ -255,8 +252,6 @@ struct LiveRunPage: View {
                 onOpenFull(run)
             } label: {
                 Label("Steps", systemImage: "list.bullet")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(OnTimeSpectrum.primaryText)
             }
             .buttonStyle(SpectrumButtonStyle(prominent: false))
         }
@@ -271,12 +266,12 @@ struct LiveRunPage: View {
                 Image(systemName: next.template?.symbol ?? next.kind.defaultSymbol)
                     .foregroundStyle(OnTimeSpectrum.tertiaryText)
                 Text("Then \(next.name)")
-                    .font(.subheadline)
+                    .font(InkType.bodyText)
                     .foregroundStyle(OnTimeSpectrum.secondaryText)
                 Spacer()
                 if let t = engine.leaveByDate(for: next) {
                     Text(TimeFormatting.clockString(t))
-                        .font(.subheadline.monospacedDigit())
+                        .font(InkType.bodyText.monospacedDigit())
                         .foregroundStyle(OnTimeSpectrum.tertiaryText)
                 }
             }
@@ -290,7 +285,8 @@ struct LiveRunPage: View {
     /// — so "step 1 of 2" drew the step you were on in the exact red this
     /// app uses for running late, on a screen where nothing was wrong.
     /// Position in the sequence is what this bar is for, and position is
-    /// already carried by which segment is tall and lit.
+    /// carried by which segment is lit. Every segment is the same 3 pt: the
+    /// current one used to stand taller as well.
     @ViewBuilder
     private func stepStrip(_ engine: RunEngine) -> some View {
         let total = max(engine.blocks.count, 1)
@@ -304,18 +300,16 @@ struct LiveRunPage: View {
                 ForEach(Array(engine.blocks.enumerated()), id: \.element.uuid) { index, _ in
                     let passed = index < engine.run.currentIndex
                     let current = index == engine.run.currentIndex
-                    Capsule()
+                    RoundedRectangle(cornerRadius: InkMetric.pipHeight / 2)
                         .fill(current ? Color.white.opacity(0.95)
                               : (passed ? Color.white.opacity(0.30) : Color.white.opacity(0.12)))
-                        .frame(height: current ? 8 : 5)
+                        .frame(height: InkMetric.pipHeight)
                 }
             }
-            .frame(height: 8)
             .animation(.easeInOut, value: engine.run.currentIndex)
 
             Text("Step \(min(engine.run.currentIndex + 1, total)) of \(total)")
-                .font(.caption2.weight(.semibold))
-                .tracking(1)
+                .font(InkType.labelSmall)
                 .foregroundStyle(OnTimeSpectrum.tertiaryText)
             }
         }

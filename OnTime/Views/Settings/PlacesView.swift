@@ -34,7 +34,7 @@ struct PlacesView: View {
             }
         }
         .inkList()
-        .inkNavigation(title: "PLACES")
+        .inkNavigation(title: "Places")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 PlusButton { editingPlace = PlaceDraft(existing: nil) }
@@ -152,7 +152,7 @@ private struct PlaceFormSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .scrollIndicators(.hidden)
-            .inkNavigation(title: draft.existing == nil ? "NEW PLACE" : "EDIT PLACE")
+            .inkNavigation(title: draft.existing == nil ? "New place" : "Edit place")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }

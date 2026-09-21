@@ -195,7 +195,7 @@ struct SequenceComposer: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 12) {
-            SectionLabel(text: "FINAL TIME") {
+            SectionLabel(text: "Final time") {
                 // Everything that runs on its own lives behind here, so this
                 // screen stays about the thing in front of you.
                 Button {
@@ -212,7 +212,7 @@ struct SequenceComposer: View {
             } label: {
                 SpectrumText(
                     text: timeString(deadlineTimeBinding.wrappedValue),
-                    font: InkType.display
+                    size: InkType.displaySize
                 )
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.vertical, 18)
@@ -238,7 +238,7 @@ struct SequenceComposer: View {
                     Button {
                         route = .addShortcut(initialTime: deadlineTimeBinding.wrappedValue)
                     } label: {
-                        Chip(text: "Add", systemImage: "plus", style: .outlined)
+                        Chip(text: "Add", systemImage: "plus", style: .quiet)
                     }
                     .buttonStyle(.plain)
                 }
@@ -267,7 +267,7 @@ struct SequenceComposer: View {
 
     private var sequenceSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            SectionLabel(text: "THE SEQUENCE") {
+            SectionLabel(text: "The sequence") {
                 HStack(spacing: 14) {
                     if scratchBlocks.count > 1 {
                         // One tap to fix a sequence entered back to front. The
@@ -305,23 +305,27 @@ struct SequenceComposer: View {
                 // Solved once for the whole list, not once per row: this body
                 // recomputes every second.
                 let starts = stepStarts
-                ForEach(displayBlocks) { block in
-                    Button {
-                        route = .editStep(block: block, allowsOpenDuration: allowsOpenDuration(excluding: block))
-                    } label: {
-                        blockRow(block, startsAt: starts[block.uuid])
-                    }
-                    .buttonStyle(.plain)
-                    // The quick way to move a step, same menu the routine
-                    // editor has. The way that can be found without knowing
-                    // to hold a row down is the Position stepper in the step
-                    // editor, which a tap on the row opens.
-                    .contextMenu {
-                        Button("Move Up") { move(block, by: -1) }
-                            .disabled(block.uuid == displayBlocks.first?.uuid)
-                        Button("Move Down") { move(block, by: 1) }
-                            .disabled(block.uuid == displayBlocks.last?.uuid)
-                        Button("Delete", role: .destructive) { delete(block) }
+                // One card for the whole sequence, ruled between steps. Each
+                // step used to be an outlined card of its own.
+                InkCard {
+                    ForEach(displayBlocks) { block in
+                        Button {
+                            route = .editStep(block: block, allowsOpenDuration: allowsOpenDuration(excluding: block))
+                        } label: {
+                            blockRow(block, startsAt: starts[block.uuid])
+                        }
+                        .buttonStyle(.plain)
+                        // The quick way to move a step, same menu the routine
+                        // editor has. The way that can be found without knowing
+                        // to hold a row down is the Position stepper in the step
+                        // editor, which a tap on the row opens.
+                        .contextMenu {
+                            Button("Move Up") { move(block, by: -1) }
+                                .disabled(block.uuid == displayBlocks.first?.uuid)
+                            Button("Move Down") { move(block, by: 1) }
+                                .disabled(block.uuid == displayBlocks.last?.uuid)
+                            Button("Delete", role: .destructive) { delete(block) }
+                        }
                     }
                 }
             }
@@ -349,9 +353,9 @@ struct SequenceComposer: View {
             onDelete: { delete(block) }
         ) {
             if block.kind == .flex {
-                badge("FLEX")
+                badge("Flex")
             } else if block.kind == .walk {
-                badge("WALK")
+                badge("Walk")
             } else if block.kind == .drive {
                 StepRowValue(text: "\(TravelTimeService.shared.manualEstimateMinutes(for: block)) min",
                              caption: driveSourceLabel(for: block),
@@ -385,13 +389,12 @@ struct SequenceComposer: View {
         return parts
     }
 
-    /// A kind is not a state, so it is not coloured. FLEX used to be amber
-    /// and WALK green, which are the two colours this app spends on a solver
+    /// A kind is not a state, so it is not coloured. Flex used to be amber
+    /// and Walk green, which are the two colours this app spends on a solver
     /// problem and on something being finished.
     private func badge(_ text: String) -> some View {
         Text(text)
-            .font(InkType.label)
-            .tracking(1.5)
+            .font(InkType.value)
             .foregroundStyle(OnTimeSpectrum.tertiaryText)
     }
 
@@ -402,10 +405,9 @@ struct SequenceComposer: View {
     /// answered and why.
     private var developerPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("DEVELOPER MODE")
-                .font(.caption.weight(.bold))
+            Text("Developer mode")
+                .font(InkType.label)
                 .foregroundStyle(OnTimeSpectrum.waiting)
-                .tracking(1.5)
 
             VStack(alignment: .leading, spacing: 6) {
                 debugRow("GPS authorization", authorizationLabel)
@@ -428,7 +430,7 @@ struct SequenceComposer: View {
                 ForEach(driveBlocks) { block in
                     VStack(alignment: .leading, spacing: 6) {
                         Text(block.name)
-                            .font(.caption.weight(.bold))
+                            .font(.caption.weight(.medium))
                         debugRow("From", block.originPlace?.isCurrentLocation == true ? "Current Location" : (block.originPlace?.name ?? "none"))
                         debugRow("To", block.destinationPlace?.name ?? "none")
                         debugRow("Source", driveSourceLabel(for: block))
@@ -455,7 +457,7 @@ struct SequenceComposer: View {
                 Button("Force-Refresh Live ETAs") {
                     refreshDriveEstimates()
                 }
-                .font(.caption.weight(.bold))
+                .font(InkType.label)
                 .foregroundStyle(OnTimeSpectrum.primaryText)
             }
         }
@@ -484,9 +486,9 @@ struct SequenceComposer: View {
 
     private func driveSourceLabel(for block: Block) -> String {
         switch travelService.source(for: block) {
-        case .live: return "LIVE"
-        case .cached: return "CACHED"
-        case .manual: return "MANUAL"
+        case .live: return "Live"
+        case .cached: return "Cached"
+        case .manual: return "Manual"
         }
     }
 
@@ -508,19 +510,17 @@ struct SequenceComposer: View {
         VStack(spacing: 12) {
             Button(action: startRun) {
                 VStack(spacing: 4) {
-                    Text(scratchBlocks.isEmpty ? "SET TIMER FOR" : "START IN")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(OnTimeSpectrum.secondaryText)
-                        .tracking(1.5)
-                    // Plain white, not another spectrum: Final Time above is
-                    // this page's one rainbow, and the Start button already
-                    // wears the spectrum as its border. Two spectrum-filled
-                    // numbers on one screen is the point at which it stops
-                    // meaning anything.
+                    // Black on the white plate of a primary button, so the
+                    // caption is the ink at the same 62% the label white is.
+                    Text(scratchBlocks.isEmpty ? "Set timer for" : "Start in")
+                        .font(InkType.labelSmall)
+                        .foregroundStyle(OnTimeSpectrum.ink.opacity(0.62))
+                    // Not another spectrum: Final Time above is this page's
+                    // one rainbow. Two spectrum filled numbers on one screen
+                    // is the point at which it stops meaning anything.
                     Text(TimeFormatting.spanWords(remaining))
-                        .font(.system(size: 30, weight: .bold, design: .rounded))
-                        .monospacedDigit()
-                        .foregroundStyle(remaining < 0 ? OnTimeSpectrum.late : OnTimeSpectrum.primaryText)
+                        .onTimeNumeral(InkType.numberSize)
+                        .foregroundStyle(remaining < 0 ? OnTimeSpectrum.late : OnTimeSpectrum.ink)
                         .contentTransition(.numericText())
                         .animation(.default, value: remaining)
                 }
@@ -530,14 +530,14 @@ struct SequenceComposer: View {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Start step 1 by")
-                        .font(.caption2.weight(.bold))
+                        .font(InkType.labelSmall)
                         .foregroundStyle(OnTimeSpectrum.secondaryText)
                     Button {
                         TimerShortcut.arm(for: mustStartAt)
                     } label: {
                         HStack(spacing: 5) {
                             Text(timeString(mustStartAt))
-                                .font(.headline)
+                                .font(InkType.value.monospacedDigit())
                                 .foregroundStyle(OnTimeSpectrum.primaryText)
                             Image(systemName: "timer")
                                 .font(.caption2)
@@ -548,11 +548,11 @@ struct SequenceComposer: View {
                 }
                 Spacer()
                 VStack(alignment: .trailing, spacing: 2) {
-                    Text("CURRENT TIME")
-                        .font(.caption2.weight(.bold))
+                    Text("Current time")
+                        .font(InkType.labelSmall)
                         .foregroundStyle(OnTimeSpectrum.secondaryText)
                     Text(now, style: .time)
-                        .font(.headline.monospacedDigit())
+                        .font(InkType.value.monospacedDigit())
                         .foregroundStyle(OnTimeSpectrum.secondaryText)
                 }
             }
@@ -716,7 +716,7 @@ struct AddShortcutSheet: View {
                 .padding(.bottom, InkMetric.section)
             }
             .scrollIndicators(.hidden)
-            .inkNavigation(title: "ADD SHORTCUT")
+            .inkNavigation(title: "Add shortcut")
             .onAppear { time = initialTime }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -730,7 +730,7 @@ struct AddShortcutSheet: View {
                 }
             }
             .sheet(isPresented: $pickingTime) {
-                FullScreenTimePicker(title: "Shortcut Time", date: $time)
+                FullScreenTimePicker(title: "Shortcut time", date: $time)
             }
         }
     }

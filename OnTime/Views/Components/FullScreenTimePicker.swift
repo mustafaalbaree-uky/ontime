@@ -71,7 +71,7 @@ struct FullScreenTimePicker: View {
             }
             .padding()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .inkNavigation(title: title.uppercased())
+            .inkNavigation(title: title)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -105,8 +105,7 @@ struct FullScreenTimePicker: View {
 
     private var bigDisplay: some View {
         Text(mode == .time ? timeString : durationString)
-            .font(.system(size: 64, weight: .heavy, design: .rounded))
-            .monospacedDigit()
+            .onTimeNumeral(64)
             // Explicitly white, not `Color.accentColor`. The accent *asset*
             // and the environment `.tint` are two different values, and this
             // view is presented as a sheet — so the number rendered in the
@@ -173,7 +172,7 @@ struct FullScreenTimePicker: View {
     private var typedEntry: some View {
         TextField("", text: $typedText, prompt: Text(mode == .time ? "h:mm am/pm" : "minutes")
             .foregroundColor(OnTimeSpectrum.tertiaryText))
-            .font(.system(size: 48, weight: .bold, design: .rounded))
+            .font(OnTimeSpectrum.numeral(48))
             .foregroundStyle(OnTimeSpectrum.primaryText)
             .tint(OnTimeSpectrum.primaryText)
             .multilineTextAlignment(.center)
@@ -182,11 +181,7 @@ struct FullScreenTimePicker: View {
             .textFieldStyle(.plain)
             .padding()
             .background(OnTimeSpectrum.surface)
-            .clipShape(RoundedRectangle(cornerRadius: InkMetric.innerRadius, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: InkMetric.innerRadius, style: .continuous)
-                    .strokeBorder(OnTimeSpectrum.hairline, lineWidth: 1)
-            }
+            .clipShape(RoundedRectangle(cornerRadius: InkMetric.radius, style: .continuous))
         .padding(.horizontal, 32)
         .onAppear {
             typedText = mode == .time ? timeString : "\(workingMinutes)"

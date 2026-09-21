@@ -104,7 +104,7 @@ struct ScheduledRoutinesView: View {
                 }
             }
             .inkList()
-            .inkNavigation(title: "SCHEDULED")
+            .inkNavigation(title: "Scheduled")
             .onReceive(ticker) { now = $0 }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -146,7 +146,7 @@ struct ScheduledRoutinesView: View {
                     // a year, and changing it meant opening the whole editor
                     // to reach the one number. The picker commits on Done
                     // only, and `onDismiss` above runs `refresh()` either way.
-                    FullScreenTimePicker(title: "Be Done By", date: anchorBinding(for: routine))
+                    FullScreenTimePicker(title: "Be done by", date: anchorBinding(for: routine))
                 }
             }
         }
@@ -266,7 +266,7 @@ private struct RoutineRow: View {
                             .foregroundStyle(OnTimeSpectrum.tertiaryText)
 
                         Text(statusLine)
-                            .font(.caption.weight(.medium))
+                            .font(InkType.rowMeta)
                             .foregroundStyle(statusColor)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -281,10 +281,10 @@ private struct RoutineRow: View {
                         .foregroundStyle(OnTimeSpectrum.primaryText)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 9)
-                        .background {
-                            RoundedRectangle(cornerRadius: InkMetric.innerRadius, style: .continuous)
-                                .strokeBorder(OnTimeSpectrum.edge, lineWidth: 1)
-                        }
+                        // A small control on a card, so the raised surface.
+                        // It was an outlined box.
+                        .background(OnTimeSpectrum.surfaceRaised,
+                                    in: RoundedRectangle(cornerRadius: InkMetric.innerRadius, style: .continuous))
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -295,14 +295,14 @@ private struct RoutineRow: View {
 
             if !actions.isEmpty {
                 Rectangle()
-                    .fill(OnTimeSpectrum.hairline)
+                    .fill(OnTimeSpectrum.rule)
                     .frame(height: 1)
 
                 HStack(spacing: 0) {
                     ForEach(actions) { action in
                         if action != actions.first {
                             Rectangle()
-                                .fill(OnTimeSpectrum.hairline)
+                                .fill(OnTimeSpectrum.rule)
                                 .frame(width: 1, height: 20)
                         }
                         Button {

@@ -159,7 +159,7 @@ struct QuickBlockEditorSheet: View {
             }
             .scrollIndicators(.hidden)
             .scrollDismissesKeyboard(.interactively)
-            .inkNavigation(title: existingBlock == nil ? "NEW STEP" : "EDIT STEP")
+            .inkNavigation(title: existingBlock == nil ? "New step" : "Edit step")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -168,7 +168,7 @@ struct QuickBlockEditorSheet: View {
             }
             .safeAreaInset(edge: .bottom) { saveBar }
             .sheet(isPresented: $pickingTargetTime) {
-                FullScreenTimePicker(title: "Wait Until", date: $targetTime)
+                FullScreenTimePicker(title: "Wait until", date: $targetTime)
             }
             .onAppear { populate() }
             .onChange(of: kind) { _, newKind in
@@ -184,7 +184,7 @@ struct QuickBlockEditorSheet: View {
 
     private var titleSection: some View {
         VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
-            SectionLabel("NAME")
+            SectionLabel("Name")
 
             InkCard {
                 InkTextRow(placeholder: "Step name", text: $name, autocapitalization: .sentences)
@@ -230,7 +230,7 @@ struct QuickBlockEditorSheet: View {
 
     private var kindSection: some View {
         VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
-            SectionLabel("TYPE")
+            SectionLabel("Type")
             ChipPicker(options: kindOptions, selection: $kind)
             Text(kindDescription)
                 .font(InkType.bodyText)
@@ -240,7 +240,7 @@ struct QuickBlockEditorSheet: View {
 
     private var walkSection: some View {
         VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
-            SectionLabel("RETURN TO")
+            SectionLabel("Return to")
             InkCard {
                 PlaceSearchField(label: "Back to", place: $destinationPlace)
             }
@@ -249,7 +249,7 @@ struct QuickBlockEditorSheet: View {
 
     private var startAtSection: some View {
         VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
-            SectionLabel("WAIT UNTIL")
+            SectionLabel("Wait until")
             InkCard {
                 InkValueRow(title: "Time",
                             value: TimeFormatting.clockString(targetTime),
@@ -260,7 +260,7 @@ struct QuickBlockEditorSheet: View {
 
     private var routeSection: some View {
         VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
-            SectionLabel("ROUTE")
+            SectionLabel("Route")
             InkCard {
                 InkToggleRow(title: "Use manual duration", isOn: $useManualEstimateOnly)
 
@@ -324,7 +324,7 @@ struct QuickBlockEditorSheet: View {
     @ViewBuilder
     private var durationSection: some View {
         VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
-            SectionLabel(showsDuration ? "DURATION" : "WHEN TIME IS UP")
+            SectionLabel(showsDuration ? "Duration" : "When time is up")
             if kind.isOpenDuration {
                 Text("This step ends when you mark it complete.")
                     .font(InkType.bodyText)
@@ -372,7 +372,7 @@ struct QuickBlockEditorSheet: View {
 
     private var positionSection: some View {
         VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
-            SectionLabel("POSITION")
+            SectionLabel("Position")
             InkCard {
                 InkStepperRow(title: "Step", value: $position, range: positionRange,
                               unit: "of \(siblings.count + 1)")

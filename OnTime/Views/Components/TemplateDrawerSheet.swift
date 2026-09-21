@@ -44,7 +44,7 @@ struct TemplateDrawerSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .scrollIndicators(.hidden)
-            .inkNavigation(title: "ADD STEP")
+            .inkNavigation(title: "Add step")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
@@ -56,7 +56,7 @@ struct TemplateDrawerSheet: View {
 
     private var beforeSection: some View {
         VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
-            SectionLabel("BEFORE")
+            SectionLabel("Before")
 
             if offeredTemplates.isEmpty {
                 InkEmpty("Nothing remembered.")
@@ -93,7 +93,7 @@ struct TemplateDrawerSheet: View {
 
     private var customSection: some View {
         VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
-            SectionLabel("CUSTOM")
+            SectionLabel("Custom")
 
             InkCard {
                 InkTextRow(placeholder: "Name", text: $customName)

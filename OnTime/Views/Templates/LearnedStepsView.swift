@@ -39,7 +39,7 @@ struct LearnedStepsView: View {
             }
         }
         .inkList()
-        .inkNavigation(title: "LEARNED STEPS")
+        .inkNavigation(title: "Learned steps")
     }
 
     private func delete(_ template: TaskTemplate) {
