@@ -259,9 +259,13 @@ struct InkStepperRow: View {
     var range: ClosedRange<Int>
     var step: Int = 1
     var unit: String = ""
+    /// Replaces the plain number and unit. For a value whose natural reading
+    /// changes with its size: 270 minutes is "4 hr 30 min".
+    var format: ((Int) -> String)? = nil
 
     private var display: String {
-        unit.isEmpty ? "\(value)" : "\(value) \(unit)"
+        if let format { return format(value) }
+        return unit.isEmpty ? "\(value)" : "\(value) \(unit)"
     }
 
     var body: some View {

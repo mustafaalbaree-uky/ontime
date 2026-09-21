@@ -43,6 +43,26 @@ struct ScheduledRoutineEditor: View {
 
     private var blocks: [Block] { routine.orderedBlocks }
 
+    /// The longest lead that still leaves the whole routine inside the eight
+    /// hours iOS lets one Live Activity live, with ten minutes to spare.
+    /// Rounded down to the stepper's coarsest step, and never under the old
+    /// ceiling, so a very long routine is not squeezed below what it had.
+    private var maxLeadMinutes: Int {
+        let routineMinutes = blocks
+            .filter { !$0.kind.isOpenDuration }
+            .reduce(0) { $0 + TravelTimeService.shared.manualEstimateMinutes(for: $1) }
+        let room = 8 * 60 - 10 - routineMinutes
+        return max(240, room / 30 * 30)
+    }
+
+    private var leadStep: Int {
+        switch routine.armLeadMinutes {
+        case ..<60: return 5
+        case ..<240: return 15
+        default: return 30
+        }
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -144,17 +164,31 @@ struct ScheduledRoutineEditor: View {
                 // "Activates", the word the Scheduled list uses for the same
                 // moment. This row said "Wakes up", so one event had two
                 // names depending on the screen.
+                // The ceiling was a flat 240, which is too short for a routine
+                // he wants counting down from the evening before. The real
+                // limit is iOS's: a Live Activity is ended by the system
+                // eight hours after it starts, so the lead plus the routine
+                // itself has to fit inside that, or the countdown is taken
+                // down part way through the steps. The step widens with the
+                // value, because 5 minutes at a time to seven hours is
+                // eighty taps.
                 InkStepperRow(title: "Activates", value: $routine.armLeadMinutes,
-                              range: 5...240, step: 5, unit: "min")
+                              range: 5...maxLeadMinutes, step: leadStep,
+                              format: { TimeFormatting.spanWords(TimeInterval($0 * 60)) })
                 InkToggleRow(title: "Enabled", isOn: $routine.isEnabled)
             }
 
             // The stepper's number has no meaning without the two clock
             // times it sits between.
             if let occurrence = ScheduleService.nextOccurrence(for: routine) {
-                Text("Activates \(timeString(occurrence.armAt)), \(routine.armLeadMinutes) min before the \(timeString(occurrence.mustStartAt)) start.")
+                Text("Activates \(timeString(occurrence.armAt)), \(TimeFormatting.spanWords(TimeInterval(routine.armLeadMinutes * 60))) before the \(timeString(occurrence.mustStartAt)) start.")
                     .font(InkType.rowMeta)
                     .foregroundStyle(OnTimeSpectrum.secondaryText)
+            }
+            if routine.armLeadMinutes >= maxLeadMinutes {
+                Text("iOS ends a Live Activity 8 hours after it starts.")
+                    .font(InkType.rowMeta)
+                    .foregroundStyle(OnTimeSpectrum.tertiaryText)
             }
         }
     }
