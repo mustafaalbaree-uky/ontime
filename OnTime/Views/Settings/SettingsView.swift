@@ -28,7 +28,6 @@ struct SettingsView: View {
                         stepsSection
                         travelSection
                         walksSection
-                        locationSection
                         developerSection
                         aboutSection
                     }
@@ -62,9 +61,20 @@ struct SettingsView: View {
         }
     }
 
+    /// The switch between `Confidence.safe` and `.typical`. It was titled
+    /// "Safe estimates (p80)", which names the statistic and not what changes
+    /// on screen, so the line under the card says what a step gets.
     private var estimatesSection: some View {
-        section("ESTIMATES") {
-            InkToggleRow(title: "Safe estimates (p80)", isOn: $settings.confidenceIsSafe)
+        VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
+            SectionLabel("ESTIMATES")
+            InkCard {
+                InkToggleRow(title: "Longer learned estimates", isOn: $settings.confidenceIsSafe)
+            }
+            Text(settings.confidenceIsSafe
+                 ? "A learned step gets the time that covered 8 in 10 of its past runs."
+                 : "A learned step gets its typical time.")
+                .font(InkType.rowMeta)
+                .foregroundStyle(OnTimeSpectrum.secondaryText)
         }
     }
 
@@ -79,8 +89,11 @@ struct SettingsView: View {
         section("NOTIFICATIONS") {
             InkToggleRow(title: "Sound", isOn: $settings.notificationSoundEnabled)
             InkToggleRow(title: "Early warning per step", isOn: $settings.leadWarningsEnabled)
-            InkStepperRow(title: "Early warning", value: $settings.defaultLeadWarningMinutes,
-                          range: 1...30, unit: "min")
+            // The minutes mean nothing while the warning is off.
+            if settings.leadWarningsEnabled {
+                InkStepperRow(title: "Warn ahead by", value: $settings.defaultLeadWarningMinutes,
+                              range: 1...30, unit: "min")
+            }
         }
     }
 
@@ -121,35 +134,35 @@ struct SettingsView: View {
         }
     }
 
-    private var locationSection: some View {
-        section("LOCATION") {
-            InkValueRow(title: "GPS",
-                        value: settings.hasRealLocation ? "Acquired" : "Stored",
-                        valueColor: settings.hasRealLocation ? OnTimeSpectrum.done : OnTimeSpectrum.secondaryText)
-
-            if settings.hasRealLocation {
-                InkValueRow(title: "Coordinates",
-                            value: locationService.lastFixDescription
-                                ?? String(format: "%.4f, %.4f", settings.lastLatitude, settings.lastLongitude),
-                            valueColor: OnTimeSpectrum.secondaryText)
-                if let at = settings.lastFixAt {
-                    InkValueRow(title: "Last fix",
-                                value: at.formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated)),
-                                valueColor: OnTimeSpectrum.secondaryText)
-                }
-            }
-
-            InkButtonRow(title: locationService.isAcquiring ? "Getting location…" : "Request location",
-                         enabled: !locationService.isAcquiring) {
-                locationService.requestLocation()
-            }
-        }
-    }
-
+    /// The GPS rows used to be a LOCATION section of their own, on for
+    /// everyone. They are diagnostics (the composer asks for a fix by itself
+    /// every time it appears), so they sit behind the developer switch with
+    /// the rest.
     private var developerSection: some View {
         section("DEVELOPER") {
             InkToggleRow(title: "Developer mode", isOn: $settings.developerModeEnabled)
             if settings.developerModeEnabled {
+                InkValueRow(title: "GPS",
+                            value: settings.hasRealLocation ? "Acquired" : "Stored",
+                            valueColor: settings.hasRealLocation ? OnTimeSpectrum.done : OnTimeSpectrum.secondaryText)
+
+                if settings.hasRealLocation {
+                    InkValueRow(title: "Coordinates",
+                                value: locationService.lastFixDescription
+                                    ?? String(format: "%.4f, %.4f", settings.lastLatitude, settings.lastLongitude),
+                                valueColor: OnTimeSpectrum.secondaryText)
+                    if let at = settings.lastFixAt {
+                        InkValueRow(title: "Last fix",
+                                    value: at.formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated)),
+                                    valueColor: OnTimeSpectrum.secondaryText)
+                    }
+                }
+
+                InkButtonRow(title: locationService.isAcquiring ? "Getting location…" : "Request location",
+                             enabled: !locationService.isAcquiring) {
+                    locationService.requestLocation()
+                }
+
                 InkButtonRow(title: "Clear ETA cache") {
                     TravelTimeService.shared.clearCache()
                 }
