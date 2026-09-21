@@ -68,7 +68,10 @@ struct RunView: View {
                             Button(role: .destructive) {
                                 showingCancelConfirm = true
                             } label: {
-                                Label("Cancel Run", systemImage: "xmark.circle")
+                                // "Stop", the word the run's own page
+                                // uses. This screen said "Cancel Run" for
+                                // the same action.
+                                Label("Stop Run", systemImage: "xmark.circle")
                             }
                         } label: {
                             Label(engine.autoAdvance ? "Auto" : "Manual",
@@ -83,11 +86,11 @@ struct RunView: View {
                 engine = RunEngineStore.shared.engine(for: run)
             }
             .confirmationDialog(
-                "Cancel this run?",
+                "Stop this run?",
                 isPresented: $showingCancelConfirm,
                 titleVisibility: .visible
             ) {
-                Button("Cancel Run", role: .destructive) {
+                Button("Stop Run", role: .destructive) {
                     if let engine { RunEngineStore.shared.cancel(engine.run) }
                     dismiss()
                 }

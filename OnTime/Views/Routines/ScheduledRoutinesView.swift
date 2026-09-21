@@ -37,6 +37,9 @@ struct ScheduledRoutinesView: View {
     /// name, no steps, dismissed) deletes it instead of leaving a permanent
     /// "Untitled, 7:00 AM, every day" row per aborted attempt.
     @State private var draftRoutine: ScheduledRoutine?
+    /// A routine the editor asked to have deleted, held until its sheet has
+    /// gone. See `ScheduledRoutineEditor.onDelete`.
+    @State private var pendingDelete: ScheduledRoutine?
     @State private var now = Date()
     private let ticker = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
@@ -121,6 +124,12 @@ struct ScheduledRoutinesView: View {
                 }
             }
             .sheet(item: $sheet, onDismiss: {
+                if let doomed = pendingDelete {
+                    pendingDelete = nil
+                    draftRoutine = nil
+                    delete(doomed)
+                    return
+                }
                 if let draft = draftRoutine {
                     draftRoutine = nil
                     if draft.name.trimmingCharacters(in: .whitespaces).isEmpty && draft.orderedBlocks.isEmpty {
@@ -131,7 +140,7 @@ struct ScheduledRoutinesView: View {
             }) { route in
                 switch route {
                 case .edit(let routine):
-                    ScheduledRoutineEditor(routine: routine)
+                    ScheduledRoutineEditor(routine: routine) { pendingDelete = routine }
                 case .time(let routine):
                     // An iqama time moves by a quarter of an hour a few times
                     // a year, and changing it meant opening the whole editor

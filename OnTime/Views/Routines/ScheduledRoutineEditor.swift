@@ -12,6 +12,12 @@ struct ScheduledRoutineEditor: View {
     @Environment(\.modelContext) private var modelContext
 
     @Bindable var routine: ScheduledRoutine
+    /// Asks the list to delete this routine once the sheet has gone. The
+    /// editor never deletes it itself: this view is bound to the routine and
+    /// keeps reading it through the dismiss animation, and a read of a model
+    /// whose row has been saved away is the uncatchable "backing data could
+    /// no longer be found" crash.
+    var onDelete: () -> Void = {}
 
     /// One route rather than three booleans and three stacked `.sheet`
     /// modifiers. SwiftUI honours a single sheet presentation per view, so
@@ -33,6 +39,7 @@ struct ScheduledRoutineEditor: View {
     }
 
     @State private var sheet: Sheet?
+    @State private var confirmingDelete = false
 
     private var blocks: [Block] { routine.orderedBlocks }
 
@@ -48,6 +55,14 @@ struct ScheduledRoutineEditor: View {
                     anchorSection
                     daysSection
                     sequenceSection
+
+                    // The only other way to delete a routine is a swipe on
+                    // the list, which nothing on screen hints at.
+                    InkCard {
+                        InkButtonRow(title: "Delete Routine", role: .destructive) {
+                            confirmingDelete = true
+                        }
+                    }
                 }
                 .padding(.horizontal, InkMetric.page)
                 .padding(.top, InkMetric.labelToCard)
@@ -61,6 +76,13 @@ struct ScheduledRoutineEditor: View {
                     Button("Done") { dismiss() }
                         .inkToolbarButton()
                 }
+            }
+            .alert("Delete this routine?", isPresented: $confirmingDelete) {
+                Button("Delete", role: .destructive) {
+                    onDelete()
+                    dismiss()
+                }
+                Button("Cancel", role: .cancel) {}
             }
             .sheet(item: $sheet) { route in
                 switch route {
@@ -119,9 +141,20 @@ struct ScheduledRoutineEditor: View {
             ))
 
             InkCard {
-                InkStepperRow(title: "Wakes up", value: $routine.armLeadMinutes,
+                // "Activates", the word the Scheduled list uses for the same
+                // moment. This row said "Wakes up", so one event had two
+                // names depending on the screen.
+                InkStepperRow(title: "Activates", value: $routine.armLeadMinutes,
                               range: 5...240, step: 5, unit: "min")
                 InkToggleRow(title: "Enabled", isOn: $routine.isEnabled)
+            }
+
+            // The stepper's number has no meaning without the two clock
+            // times it sits between.
+            if let occurrence = ScheduleService.nextOccurrence(for: routine) {
+                Text("Activates \(timeString(occurrence.armAt)), \(routine.armLeadMinutes) min before the \(timeString(occurrence.mustStartAt)) start.")
+                    .font(InkType.rowMeta)
+                    .foregroundStyle(OnTimeSpectrum.secondaryText)
             }
         }
     }
@@ -240,7 +273,7 @@ struct ScheduledRoutineEditor: View {
     private var startSummary: String? {
         guard let occurrence = ScheduleService.nextOccurrence(for: routine) else { return nil }
         guard !blocks.isEmpty else { return nil }
-        return "Start by \(timeString(occurrence.mustStartAt)) · Wakes up \(timeString(occurrence.armAt))"
+        return "Start by \(timeString(occurrence.mustStartAt))"
     }
 
     private var anchorBinding: Binding<Date> {

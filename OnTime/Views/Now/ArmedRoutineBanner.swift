@@ -87,7 +87,8 @@ private struct BannerRow: View {
 
     private var detail: String {
         guard let engine else { return "Starting" }
-        if engine.isWaitingToStart { return "Waiting to start" }
+        // Same words as the Active tab's row and the run page's label.
+        if engine.isWaitingToStart { return "Until start" }
         guard let block = engine.currentBlock else { return "Running" }
         return "Step \(run.currentIndex + 1) of \(engine.blocks.count) · \(block.name)"
     }
