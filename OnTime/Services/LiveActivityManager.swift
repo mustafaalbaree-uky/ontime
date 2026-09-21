@@ -211,16 +211,26 @@ enum LiveActivityManager {
         activities[planId] = nil
     }
 
+    /// An activity the Pi started by push, for the push test. No `Run` stands
+    /// behind it, so both launch sweeps below would end it the moment the
+    /// push woke the app, which is the one thing the test exists to watch.
+    /// Goes away once a pushed activity is adopted by the run it belongs to.
+    static let pushTestPrefix = "pushtest"
+
+    private static func isPushTest(_ a: Activity<OnTimeActivityAttributes>) -> Bool {
+        a.attributes.planId.hasPrefix(pushTestPrefix)
+    }
+
     static func endAll() async {
         activities.removeAll()
         starting.removeAll()
-        for activity in Activity<OnTimeActivityAttributes>.activities {
+        for activity in Activity<OnTimeActivityAttributes>.activities where !isPushTest(activity) {
             await activity.end(nil, dismissalPolicy: .immediate)
         }
         // A start that was already past its claim check when this began can
         // register a fresh activity behind the sweep above; one more pass
         // catches the straggler instead of leaving it until next launch.
-        for activity in Activity<OnTimeActivityAttributes>.activities {
+        for activity in Activity<OnTimeActivityAttributes>.activities where !isPushTest(activity) {
             await activity.end(nil, dismissalPolicy: .immediate)
         }
         activities.removeAll()
@@ -231,7 +241,8 @@ enum LiveActivityManager {
     /// `Run` row (app force-quit mid-run), without touching activities for
     /// runs that legitimately resumed. See `RootView.resumeOpenRuns`.
     static func endOrphans(keeping planIds: Set<String>) async {
-        for activity in Activity<OnTimeActivityAttributes>.activities where !planIds.contains(activity.attributes.planId) {
+        for activity in Activity<OnTimeActivityAttributes>.activities
+        where !planIds.contains(activity.attributes.planId) && !isPushTest(activity) {
             await activity.end(nil, dismissalPolicy: .immediate)
         }
         activities = activities.filter { planIds.contains($0.key) }
