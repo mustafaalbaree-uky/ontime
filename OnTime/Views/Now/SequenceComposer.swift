@@ -97,16 +97,19 @@ struct SequenceComposer: View {
     /// swallowed the error, and the headline countdown silently fell back to
     /// the bare deadline, overstating the time available by the sum of every
     /// fixed and drive step.
-    private var mustStartAt: Date {
-        guard !scratchBlocks.isEmpty else { return deadline }
+    private var mustStartAt: Date { solution?.start ?? deadline }
+
+    /// The one solve behind both the headline and the clock time on each
+    /// row, so the two cannot disagree. nil with no steps.
+    private var solution: Solution? {
+        guard !scratchBlocks.isEmpty else { return nil }
         let durations: [BlockDuration] = scratchBlocks.map { block in
             if block.kind.isOpenDuration { return .known(0) }
             let minutes = TravelTimeService.shared.manualEstimateMinutes(for: block)
             return .known(TimeInterval(minutes * 60))
         }
         let input = SolverInput(durations: durations, deadline: deadline, start: nil, pinnedFlex: nil)
-        guard let solution = try? Solver.solve(input) else { return deadline }
-        return solution.start
+        return try? Solver.solve(input)
     }
 
     private var remaining: TimeInterval { mustStartAt.timeIntervalSince(now) }
@@ -299,11 +302,14 @@ struct SequenceComposer: View {
             if scratchBlocks.isEmpty {
                 InkEmpty("No steps.")
             } else {
+                // Solved once for the whole list, not once per row: this body
+                // recomputes every second.
+                let starts = stepStarts
                 ForEach(displayBlocks) { block in
                     Button {
                         route = .editStep(block: block, allowsOpenDuration: allowsOpenDuration(excluding: block))
                     } label: {
-                        blockRow(block)
+                        blockRow(block, startsAt: starts[block.uuid])
                     }
                     .buttonStyle(.plain)
                     // The quick way to move a step, same menu the routine
@@ -322,11 +328,23 @@ struct SequenceComposer: View {
         }
     }
 
-    private func blockRow(_ block: Block) -> some View {
+    /// When each step begins if the first one starts at `mustStartAt`. The
+    /// solver's blocks come back in the order the durations went in, which
+    /// is `scratchBlocks`' order.
+    private var stepStarts: [UUID: Date] {
+        guard let solution, solution.blocks.count == scratchBlocks.count else { return [:] }
+        var starts: [UUID: Date] = [:]
+        for (block, schedule) in zip(scratchBlocks, solution.blocks) {
+            starts[block.uuid] = schedule.scheduledStart
+        }
+        return starts
+    }
+
+    private func blockRow(_ block: Block, startsAt: Date?) -> some View {
         StepRowCard(
             symbol: symbol(for: block),
             name: block.name,
-            meta: meta(for: block),
+            meta: meta(for: block, startsAt: startsAt),
             problem: block.kind == .drive ? travelService.error(for: block) : nil,
             onDelete: { delete(block) }
         ) {
@@ -345,8 +363,16 @@ struct SequenceComposer: View {
     }
 
     /// The step's meta line. Joined by a middle dot inside `StepRowCard`.
-    private func meta(for block: Block) -> [String] {
-        var parts = ["STEP \(block.order + 1)"]
+    ///
+    /// It leads with the clock time the step begins. It used to lead with
+    /// "STEP 2", which the row's place in the list already says. A Wait until
+    /// step has no start of its own to show: it runs from whenever the run
+    /// starts until its clock time, and that time is already on the line.
+    private func meta(for block: Block, startsAt: Date?) -> [String] {
+        var parts: [String] = []
+        if block.kind != .startAt, let startsAt {
+            parts.append(timeString(startsAt))
+        }
         if block.kind == .drive, let dest = block.destinationPlace {
             parts.append("to \(dest.name)")
         }

@@ -226,7 +226,7 @@ struct RunView: View {
                    : (current ? "arrow.right.circle.fill"
                       : (block.template?.symbol ?? block.kind.defaultSymbol))),
             name: block.name,
-            meta: meta(for: block, index: index),
+            meta: meta(for: block),
             state: state,
             // Only not yet reached steps can be removed: a done or active
             // step has real elapsed time recorded against it that deleting
@@ -239,8 +239,10 @@ struct RunView: View {
         }
     }
 
-    private func meta(for block: Block, index: Int) -> [String] {
-        var parts = ["STEP \(index + 1)"]
+    /// No "STEP 2" here: the row's place in the list, its rail and its
+    /// symbol already say where it is in the run.
+    private func meta(for block: Block) -> [String] {
+        var parts: [String] = []
         if block.kind == .drive, let dest = block.destinationPlace {
             parts.append("to \(dest.name)")
         }

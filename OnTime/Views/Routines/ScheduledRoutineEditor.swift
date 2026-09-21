@@ -151,11 +151,12 @@ struct ScheduledRoutineEditor: View {
                 InkEmpty("No steps.")
             } else {
                 VStack(spacing: InkMetric.cardToCard) {
+                    let starts = stepStarts
                     ForEach(Array(blocks.enumerated()), id: \.element.uuid) { index, block in
                         Button {
                             sheet = .editStep(block)
                         } label: {
-                            stepRow(block, index: index)
+                            stepRow(block, startsAt: starts[block.uuid])
                         }
                         .buttonStyle(.plain)
                         // Reordering by context menu rather than by a
@@ -180,11 +181,11 @@ struct ScheduledRoutineEditor: View {
         }
     }
 
-    private func stepRow(_ block: Block, index: Int) -> some View {
+    private func stepRow(_ block: Block, startsAt: Date?) -> some View {
         StepRowCard(
             symbol: block.template?.symbol ?? block.kind.defaultSymbol,
             name: block.name,
-            meta: metaLine(for: block, index: index),
+            meta: metaLine(for: block, startsAt: startsAt),
             onDelete: { delete(block) }
         ) {
             if block.kind == .flex {
@@ -197,8 +198,30 @@ struct ScheduledRoutineEditor: View {
         }
     }
 
-    private func metaLine(for block: Block, index: Int) -> [String] {
-        var parts = ["STEP \(index + 1)"]
+    /// When each step begins on the next occurrence: `mustStartAt` plus
+    /// everything before it, an open duration step counting as zero, which
+    /// is how the occurrence itself was solved.
+    private var stepStarts: [UUID: Date] {
+        guard let occurrence = ScheduleService.nextOccurrence(for: routine) else { return [:] }
+        var starts: [UUID: Date] = [:]
+        var cursor = occurrence.mustStartAt
+        for block in blocks {
+            starts[block.uuid] = cursor
+            guard !block.kind.isOpenDuration else { continue }
+            let minutes = TravelTimeService.shared.manualEstimateMinutes(for: block)
+            cursor = cursor.addingTimeInterval(TimeInterval(minutes * 60))
+        }
+        return starts
+    }
+
+    /// Leads with the clock time the step begins, same as the composer's
+    /// rows. It used to lead with "STEP 2", which the row's place already
+    /// says.
+    private func metaLine(for block: Block, startsAt: Date?) -> [String] {
+        var parts: [String] = []
+        if block.kind != .startAt, let startsAt {
+            parts.append(timeString(startsAt))
+        }
         if block.kind == .drive, let dest = block.destinationPlace {
             parts.append("to \(dest.name)")
         }
