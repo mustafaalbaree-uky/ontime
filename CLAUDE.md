@@ -197,6 +197,54 @@ moment; the state is merely reconstructible, so `armDueRoutines` backdates
 a local notification (guaranteed), `scenePhase` → `.active` (common), and a
 `BGAppRefreshTask` (opportunistic, may never fire — depend on nothing here).
 
+**The Pi starts a routine's Live Activity by push, because nothing on the
+phone can.** `Activity.request` only works in the foreground and iOS will not
+wake the app at the arm moment, so until Sep 2026 the Dynamic Island stayed
+empty at arm time until the notification was tapped. Now
+`ScheduleService.refreshArmAlarms` also hands its occurrence list to
+`PiSchedule`, which uploads it to `tools/pi/ontime_pushd.py` on the Pi
+(warden, `ontime-push.service`, port 8790 on the Tailscale address only). Each
+event is an absolute clock time plus the exact APNs payload to deliver then,
+built by the app from the real `ContentState`; the Pi does no scheduling math.
+An upload replaces the Pi's whole list. `tools/pi/deploy.sh` deploys the
+daemon; the APNs key lives only in `~/.ontime-push` on the Pi, never in the
+repo. `curl http://100.88.112.8:8790/status` shows what is pending and what
+APNs answered for the last sends.
+
+Things about it that were each found the hard way:
+
+- **The pushed activity and the run share an id without talking.** An
+  activity's `planId` is fixed when it starts, and the run that owns it is
+  minted later. `OccurrenceIdentity.planUUID` derives the plan's uuid from the
+  routine and the occurrence's day, so `LiveActivityManager.current(for:)`
+  adopts the pushed activity instead of raising a second one. `armNow` opts
+  out, or a restarted run would share a uuid with the cancelled plan.
+- **Launch arms before it sweeps** (`RootView.task`). The sweep ends any
+  activity with no open run behind it, which is exactly what a pushed
+  activity is until the arming pass mints its run.
+- **The Pi is addressed by tailnet name, not IP.** ATS refuses plain HTTP,
+  its exceptions cannot name an IP, and `NSAllowsLocalNetworking` does not
+  cover 100.x addresses. Info.plist carries one exception for
+  `warden.taile3f2ad.ts.net`.
+- **Dates inside `content-state` are seconds since 2001; `stale-date` and
+  `timestamp` are Unix seconds.** The first belongs to the app's Codable type
+  and ActivityKit's default decoder, the other two to APNs.
+- **A build installed from Xcode is on the APNs sandbox host.** The daemon
+  reuses one provider token for 40 minutes; APNs rejects a provider that
+  mints one more often than every 20.
+- **`print` is not evidence on a phone.** An app launched outside Xcode
+  buffers stdout, so `devicectl --console` shows nothing. `PiSchedule` and
+  `PushTokens` write their state to files in Documents that
+  `devicectl device copy from` can read (`pi-schedule-status.json`,
+  `push-tokens.json`).
+
+With Tailscale off on the phone, or the Pi down, the upload fails and that
+routine arms the old way: local notification, then foreground. Still open:
+only each routine's *next* occurrence is uploaded, so a day with no app launch
+leaves the Pi without the following day; and step changes mid run are not
+pushed yet, so the Island still goes red and counts up at a step boundary
+while the app is suspended.
+
 **There is no schema migration.** `OnTimeApp.openStore` rebuilds the store
 when it cannot be opened against `Schema0.models`. That is deliberate for a
 personal app whose data re-accumulates, but it means any model change wipes
