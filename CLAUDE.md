@@ -72,42 +72,85 @@ Shared/           Compiled into both the app and the widget extension —
                    palette). Data and pure functions, no stateful views.
 ```
 
-**The ground is true black and content sits on it as hairline cards.**
-`Shared/OnTimeSpectrum.swift` is the palette (compiled into the widget too,
-so the phone and the Lock Screen cannot drift into two products);
-`OnTime/Views/Theme/InkComponents.swift` is the set of rows, labels, cards and
-controls every screen is built from, and `SpectrumViews.swift` holds the card,
-the button style and the one animated piece left. `RootView` pins
-`.preferredColorScheme(.dark)` deliberately: the palette only reads as lit
-with nothing behind it.
+**The ground is true black and content sits on it as filled cards, set in
+light SF Pro.** This is "look A", chosen by Mustafa on 21 Sep 2026 from three
+mockups (`https://claude.ai/artifact/Nx2jZ9QJ7Zc396eTwPPEbd`) after he called
+the previous look ugly in these words: a "thick, ugly font", edges "trying to
+be funny", text "big and boring", "it looks like a toy", worst of all on the
+routine editor and the Live Activity. That look was SF Rounded in bold and
+heavy, 18 pt corners, a hairline outline on every box and small bold uppercase
+tracked labels. Do not drift back toward any of it.
 
-Four rules hold the whole look together.
+`Shared/OnTimeSpectrum.swift` is the palette and the numeral rule (compiled
+into the widget too, so the phone and the Lock Screen cannot drift into two
+products); `OnTime/Views/Theme/InkComponents.swift` is the type scale
+(`InkType`), the metrics (`InkMetric`) and the rows, labels, cards and
+controls every screen is built from; `SpectrumViews.swift` holds the card, the
+button style and the one animated piece left. `RootView` pins
+`.preferredColorScheme(.dark)` deliberately.
+
+What the look is made of:
+
+- **Type is SF Pro, never `.rounded`, and nothing is bold.** Running text and
+  row titles are regular; the primary button's label is medium, and that is
+  the heaviest weight in the app. Text uses text styles, so Dynamic Type works.
+- **Large numbers go through `onTimeNumeral(size)`**: thin from 36 pt, light
+  from 24 pt, regular below, monospaced digits, tracking of -0.02 em from
+  24 pt up. The hero sizes (`InkType.heroSize` 62, `displaySize` 52,
+  `numberSize` 30) did not shrink; thin type is what made them stop shouting.
+- **Labels are sentence case, regular, `secondaryText`, untracked.**
+  `SectionLabel`, `.inkNavigation(title:)` and every badge take sentence case
+  ("Final time", "Flex"); a name the user typed is shown as typed. Nothing in
+  `OnTime/Views` or `OnTimeWidget` calls `.uppercased()` for display or sets
+  positive `.tracking`.
+- **A card is a filled `surface` (#121315) with a 10 pt corner and no
+  stroke.** Rows inside one are split by `rule` (white at 7%). A control
+  sitting *on* a card uses `surfaceRaised` (#1F2023), because `surface` on
+  `surface` disappears; `spectrumCard` sets the `\.inkOnCard` environment
+  value and `Chip`, `StepRowCard`, `ScrubTrack` and the place results read it.
+  A sequence is one card of ruled rows, not a card per step. The current step
+  is marked by the raised fill. `hairline` (white at 12%) is only for lines
+  drawn straight on black: the tab bar and the pinned bottom bars.
+- **Corners are 10 pt (`InkMetric.radius`) and 8 pt inside.** Nothing is a
+  pill or a circle except the system toggle, the stepper's minus and plus, the
+  page dots and the Stop x. Chips and weekday selectors are rounded
+  rectangles: unselected is a surface fill with `tertiaryText`, selected is
+  white with black text.
+- **The primary button is a white fill with black text; the quiet one is
+  `surfaceRaised` with white text; neither has a border**
+  (`SpectrumButtonStyle`, which sets the font and the text colour itself). A
+  prominent button's label must not set a white `foregroundStyle`: that is
+  white on white.
+- **Progress is a uniform 3 pt** (`InkMetric.pipHeight`): pips, the step strip
+  and `TimeBar`. The current segment is brighter, not taller.
+
+Four rules underneath it that the restyle did not change.
 
 - **Three whites do the hierarchy.** `primaryText` 100%, `secondaryText` 62%,
-  `tertiaryText` 38%. Progress and rails use white at 0.95 / 0.30 / 0.12 for
-  current / done / ahead. A grey that is not one of those is a mistake.
+  `tertiaryText` 38%. Progress uses white at 0.95 / 0.30 / 0.12 for current /
+  done / ahead. A grey that is not one of those, or one of the two named
+  surfaces, is a mistake.
 - **Colour is a signal or it is absent.** `late` red once a target is past
   (always behind an explicit `+`), `done` green for finished, `waiting` amber
-  for a solver problem, a stale value or a missing permission. `accent` exists
-  only so a `Toggle` can be seen wearing something; it is never text, never an
-  icon, never the tab bar. Nothing else on any screen is coloured, and a
-  *kind* is never coloured, only a state.
+  for a solver problem, a stale value or a missing permission. `accent` (the
+  system green, so switches read as native) exists only so a `Toggle` can be
+  seen wearing something; it is never text, never an icon, never the tab bar.
+  Nothing else on any screen is coloured, and a *kind* is never coloured, only
+  a state.
 - **The Final Time number on the composer is the only spectrum element in the
-  product.** `SpectrumText` fills it, and nothing else calls that view. The
-  page dots, the step rails, the Live Activity's pips and its ring are all
-  plain white. The per step hue and the green to red ramp are gone from the
-  palette entirely, so a caller cannot reach for them by accident.
+  product.** `SpectrumText` fills it, in the thin numeral, and nothing else
+  calls that view. The per step hue and the green to red ramp are gone from
+  the palette entirely, so a caller cannot reach for them by accident.
 - **`List` and `Form` are not used for anything the user sees.** On a forced
-  dark scheme they render grey grouped panels, grey section headers and a cyan
-  tint on every value, which is a different product beside the ink. A screen
+  dark scheme they render grey grouped panels, grey section headers and a
+  tint on every value, which is a different product beside this one. A screen
   is a `ScrollView` of labelled cards. The two screens that genuinely need
   `swipeActions` keep a `List` stripped to nothing by `.inkList()`, with a
   card in every row.
 
-Every section is a `SectionLabel` (small, bold, uppercase, tracked) over its
-card, never a `navigationTitle`. A pushed screen or sheet gets its title as a
-principal toolbar item through `.inkNavigation(title:)`, in the same label
-style, over a black bar.
+Every section is a `SectionLabel` over its card, never a `navigationTitle`. A
+pushed screen or sheet gets its title as a principal toolbar item through
+`.inkNavigation(title:)`, over a black bar.
 
 **A Live Activity cannot animate, so it is monochrome and informational.**
 Only `Text(timerInterval:)` and `ProgressView(timerInterval:)` move without
@@ -486,7 +529,7 @@ each screen's hero, and the result was noise: nothing was emphasised because
 everything was, and the colour stopped being able to mean anything. Then even
 one per screen was too many, because a run is the screen you read while doing
 something else. So the hero is the composer's Final Time number and nothing
-else. Every button wears a plain white edge (`SpectrumButtonStyle`).
+else. Buttons are plain: white filled or raised surface (`SpectrumButtonStyle`).
 
 Two specific things were wrong with the per step hue, not just loud.
 `OnTimeSpectrum.step` was a hue by index starting at 0, so **the first step of
@@ -497,9 +540,10 @@ function is deleted, along with the green to red `ramp` and the angular
 gradient the old `SpectrumRing` swept.
 
 `LiveRunPage` and `RunView` are monochrome throughout. The ring is gone,
-replaced by `TimeBar`, a flat white line under the countdown. Symbols, step
-rails, the current step card edge and the "step 1 of 2" strip are all white at
-three opacities. Colour on those two screens means exactly two things:
+replaced by `TimeBar`, a flat white line under the countdown. Symbols and the
+"step 1 of 2" strip are white at three opacities; the step rails and the
+current step's bright edge went with look A, and the current step is the row
+on the raised surface. Colour on those two screens means exactly two things:
 `OnTimeSpectrum.late` red when a step is past its time, `OnTimeSpectrum.done`
 green when one is finished.
 
