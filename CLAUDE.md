@@ -51,6 +51,25 @@ Run a single test with `-only-testing:OnTimeTests/SolverTests/solvesForStartWith
 Registered in PhoneDeck (`~/Code/PhoneDeck`, `AppRegistry.swift`, id `ontime`)
 — reinstalling from the PhoneDeck menu bar app runs the same `tools/install.sh`.
 
+**The app icon is look A too: white on true black, no colour.** The steps of a
+run are laid round a dial that closes at 12, which is the deadline. The part
+behind the hand is the `done` white (30%), the part still to do is white, and
+the cuts between steps are the same width as the hand. It replaced a blue
+gradient with an orange ring, which belonged to the look he called a toy.
+`icon/make_icon.py` writes `icon/AppIcon.svg` (move the hand by changing
+`DONE_UNTIL` to another entry of `JOINTS`); render it into the asset catalog
+with:
+
+```
+python3 icon/make_icon.py icon/AppIcon.svg
+rsvg-convert -w 1024 -h 1024 icon/AppIcon.svg -o /tmp/icon-rgba.png
+python3 -c "from PIL import Image; Image.open('/tmp/icon-rgba.png').convert('RGB').save('OnTime/Assets.xcassets/AppIcon.appiconset/AppIcon.png')"
+```
+
+The icon set is one opaque 1024 PNG (`sips -g hasAlpha` must say `no`). A new
+icon only shows on the phone after an install, because `tools/install.sh`
+moves the build number and SpringBoard caches the icon against it.
+
 ## Architecture
 
 ```
