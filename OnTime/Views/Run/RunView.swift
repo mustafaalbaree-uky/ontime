@@ -93,12 +93,11 @@ struct RunView: View {
                 }
                 Button("Keep Running", role: .cancel) {}
             } message: {
-                // Honest about the consequence: the Plan row survives in
-                // the store, but no screen lists plans, so a cancelled
-                // hand-built sequence is not recoverable from anywhere.
-                // The old copy pointed at a "Plans" screen that was
-                // deleted along with its tab.
-                Text("The countdown and Live Activity end. The sequence cannot be reopened.")
+                // Same sentence as `LiveRunPage`'s Stop alert. It used to
+                // add that the sequence cannot be reopened, which was true
+                // while Start handed the builder's own steps to the run.
+                // Start runs copies now, and a routine's run has Start Now.
+                Text("The countdown and its Live Activity end.")
             }
             .sheet(isPresented: $showingAddStep) {
                 TemplateDrawerSheet(

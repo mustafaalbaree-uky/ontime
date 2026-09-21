@@ -48,8 +48,8 @@ enum ComposerRoute: Identifiable {
 /// the composer is one page among the runs rather than the whole screen.
 ///
 /// The sequence here is real `Block`s with `plan == nil && routine == nil`
-/// ("scratch" blocks), claimed by a `Plan` the moment a run starts. They
-/// persist, so a half-built sequence survives closing the app.
+/// ("scratch" blocks). They persist, so a half-built sequence survives
+/// closing the app, and Start runs copies of them, so it survives Start too.
 struct SequenceComposer: View {
     /// Called once a `Run` exists, so the pager can slide onto it.
     var onStarted: (Run) -> Void
@@ -74,6 +74,10 @@ struct SequenceComposer: View {
     /// Which sheet this screen is asking for. Owned by `NowView`, not here —
     /// see `ComposerRoute`.
     @Binding var route: ComposerRoute?
+
+    /// An `.alert`, for the reason on `LiveRunPage`'s Stop confirmation: this
+    /// is a page of the pager, where an action sheet swallows its first tap.
+    @State private var confirmingClear = false
 
     // MARK: - Derived time
 
@@ -161,6 +165,12 @@ struct SequenceComposer: View {
             refreshDriveEstimates()
         }
         .onChange(of: scratchBlocks) { _, _ in refreshDriveEstimates() }
+        .alert("Clear the sequence?", isPresented: $confirmingClear) {
+            Button("Clear", role: .destructive) { clearSequence() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(scratchBlocks.count == 1 ? "Removes 1 step." : "Removes \(scratchBlocks.count) steps.")
+        }
         // No `.sheet` here, deliberately. `NowView` presents them, from
         // outside the pager. See `ComposerRoute`.
     }
@@ -269,6 +279,15 @@ struct SequenceComposer: View {
                                 .labelStyle(.titleAndIcon)
                                 .foregroundStyle(OnTimeSpectrum.primaryText)
                         }
+                    }
+
+                    if !scratchBlocks.isEmpty {
+                        // Start runs copies and leaves these steps where they
+                        // are, so there has to be a way to empty the builder
+                        // that is not deleting the rows one at a time.
+                        Button("Clear") { confirmingClear = true }
+                            .font(InkType.label)
+                            .foregroundStyle(OnTimeSpectrum.primaryText)
                     }
 
                     PlusButton {
@@ -575,6 +594,13 @@ struct SequenceComposer: View {
         }
     }
 
+    private func clearSequence() {
+        withAnimation(.easeInOut) {
+            for block in scratchBlocks {
+                modelContext.delete(block)
+            }
+        }
+    }
 
     private func delete(_ shortcut: QuickShortcut) {
         modelContext.delete(shortcut)
@@ -590,8 +616,18 @@ struct SequenceComposer: View {
 
     /// Builds a real `Plan`/`Run` from the scratch blocks via `RunLauncher`,
     /// then hands the run back so the pager can slide onto its page.
+    ///
+    /// The run gets copies, the same way `ScheduleService.arm` spawns a
+    /// routine. It used to be handed the scratch blocks themselves, which the
+    /// `Plan` then claimed: the builder was empty the moment Start was
+    /// pressed, and stopping a run started by mistake lost the sequence with
+    /// it, since nothing lists plans. Clear is how the builder empties now.
     private func startRun() {
-        var blocks = scratchBlocks
+        var blocks = scratchBlocks.enumerated().map { index, block in
+            let copy = block.copyForSpawn(order: index)
+            modelContext.insert(copy)
+            return copy
+        }
         if blocks.isEmpty {
             let goBlock = Block(order: 0, name: "Go", kind: .flex)
             modelContext.insert(goBlock)

@@ -19,9 +19,8 @@ import UIKit
 /// of, and swiping between two concurrent runs is one gesture.
 ///
 /// The composer half is unchanged in what it does: the sequence here is real
-/// `Block`s (`plan == nil && routine == nil` — "scratch" blocks, claimed by
-/// a `Plan` the moment a run starts), the same type `ScheduledRoutineEditor`
-/// uses, built through `QuickBlockEditorSheet` and started through
+/// `Block`s (`plan == nil && routine == nil`, "scratch" blocks, which a run
+/// copies when it starts), the same type `ScheduledRoutineEditor` uses, built through `QuickBlockEditorSheet` and started through
 /// `RunLauncher`.
 ///
 /// Two deliberate departures from the HTML prototype, both per explicit
