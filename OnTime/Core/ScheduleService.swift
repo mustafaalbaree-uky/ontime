@@ -69,10 +69,25 @@ enum ScheduleService {
                                now: Date = Date(),
                                calendar: Calendar = .current,
                                requiringFutureArm: Bool = false) -> Occurrence? {
-        guard routine.isEnabled else { return nil }
+        upcomingOccurrences(for: routine, now: now, calendar: calendar,
+                            requiringFutureArm: requiringFutureArm, limit: 1).first
+    }
+
+    /// Every occurrence in the coming week, soonest first, under the same
+    /// rules as `nextOccurrence`. The Pi gets the whole week rather than the
+    /// next one for the reason the widget snapshot does: it acts at moments
+    /// the app has no say over, and has to stay right through days of the
+    /// app never being launched.
+    static func upcomingOccurrences(for routine: ScheduledRoutine,
+                                    now: Date = Date(),
+                                    calendar: Calendar = .current,
+                                    requiringFutureArm: Bool = false,
+                                    limit: Int = 8) -> [Occurrence] {
+        guard routine.isEnabled else { return [] }
 
         let weekdays = routine.weekdays
-        guard !weekdays.isEmpty else { return nil }
+        guard !weekdays.isEmpty else { return [] }
+        var found: [Occurrence] = []
 
         let blocks = routine.orderedBlocks
         let durs = durations(for: blocks, now: now)
@@ -120,10 +135,11 @@ enum ScheduleService {
 
             let armAt = mustStartAt.addingTimeInterval(TimeInterval(-routine.armLeadMinutes * 60))
             if requiringFutureArm && armAt <= now { continue }
-            return Occurrence(deadline: deadline, mustStartAt: mustStartAt, armAt: armAt)
+            found.append(Occurrence(deadline: deadline, mustStartAt: mustStartAt, armAt: armAt))
+            if found.count >= limit { break }
         }
 
-        return nil
+        return found
     }
 
     // MARK: - Arming
@@ -410,11 +426,13 @@ enum ScheduleService {
             }
             .sorted { $0.1.armAt < $1.1.armAt }
 
-        // The same list, handed to the Pi, which starts each occurrence's
+        // The coming week, handed to the Pi, which starts each occurrence's
         // Live Activity by push at `armAt`. Not subject to the budget below:
         // that cap is about iOS's pending notification limit.
-        PiSchedule.publish(occurrences.compactMap { routine, occurrence in
-            PiSchedule.armEvent(for: routine, occurrence: occurrence, calendar: calendar)
+        PiSchedule.publish(routines.flatMap { routine -> [PiSchedule.Event] in
+            guard !routine.orderedBlocks.isEmpty else { return [] }
+            return upcomingOccurrences(for: routine, now: now, calendar: calendar, requiringFutureArm: true)
+                .compactMap { PiSchedule.armEvent(for: routine, occurrence: $0, calendar: calendar) }
         })
 
         var budget = Self.armAlarmBudget
