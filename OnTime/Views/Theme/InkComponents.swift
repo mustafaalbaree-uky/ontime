@@ -399,8 +399,8 @@ struct InkButtonRow: View {
     }
 }
 
-/// A text field as a row of a card. No border of its own: the card is the
-/// border.
+/// A text field as a row of a card. No plate of its own: the card is the
+/// plate.
 struct InkTextRow: View {
     var placeholder: String
     @Binding var text: String
