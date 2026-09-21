@@ -29,8 +29,8 @@ enum ComposerRoute: Identifiable {
     case finalTime
     case scheduled
     case addShortcut(initialTime: Date)
-    case addStep(order: Int, isFirst: Bool, allowsOpenDuration: Bool)
-    case editStep(block: Block, isFirst: Bool, allowsOpenDuration: Bool)
+    case addStep(allowsOpenDuration: Bool)
+    case editStep(block: Block, allowsOpenDuration: Bool)
 
     var id: String {
         switch self {
@@ -38,7 +38,7 @@ enum ComposerRoute: Identifiable {
         case .scheduled: return "scheduled"
         case .addShortcut: return "addShortcut"
         case .addStep: return "addStep"
-        case .editStep(let block, _, _): return "editStep-\(block.uuid.uuidString)"
+        case .editStep(let block, _): return "editStep-\(block.uuid.uuidString)"
         }
     }
 }
@@ -132,14 +132,6 @@ struct SequenceComposer: View {
     private var displayBlocks: [Block] {
         settings.sequenceNewestFirst ? Array(scratchBlocks.reversed()) : scratchBlocks
     }
-
-    /// The `order` a newly-added block should get: strictly after every
-    /// existing block. Using `scratchBlocks.count` here used to collide with
-    /// an existing block's `order` once a block had been deleted without the
-    /// rest being renumbered — a duplicate sort key, which is what made a
-    /// new step flash into place and then swap somewhere else on the next
-    /// redraw as SwiftData resolved the tie differently between fetches.
-    private var nextScratchOrder: Int { (scratchBlocks.map(\.order).max() ?? -1) + 1 }
 
     var body: some View {
         ScrollView {
@@ -280,7 +272,7 @@ struct SequenceComposer: View {
                     }
 
                     PlusButton {
-                        route = .addStep(order: nextScratchOrder, isFirst: scratchBlocks.isEmpty, allowsOpenDuration: allowsOpenDuration())
+                        route = .addStep(allowsOpenDuration: allowsOpenDuration())
                     }
                 }
             }
@@ -290,11 +282,22 @@ struct SequenceComposer: View {
             } else {
                 ForEach(displayBlocks) { block in
                     Button {
-                        route = .editStep(block: block, isFirst: block.order == (scratchBlocks.map(\.order).min() ?? block.order), allowsOpenDuration: allowsOpenDuration(excluding: block))
+                        route = .editStep(block: block, allowsOpenDuration: allowsOpenDuration(excluding: block))
                     } label: {
                         blockRow(block)
                     }
                     .buttonStyle(.plain)
+                    // The quick way to move a step, same menu the routine
+                    // editor has. The way that can be found without knowing
+                    // to hold a row down is the Position stepper in the step
+                    // editor, which a tap on the row opens.
+                    .contextMenu {
+                        Button("Move Up") { move(block, by: -1) }
+                            .disabled(block.uuid == displayBlocks.first?.uuid)
+                        Button("Move Down") { move(block, by: 1) }
+                            .disabled(block.uuid == displayBlocks.last?.uuid)
+                        Button("Delete", role: .destructive) { delete(block) }
+                    }
                 }
             }
         }
@@ -528,16 +531,42 @@ struct SequenceComposer: View {
     private func reverseSequence() {
         let chronological = scratchBlocks.sorted { $0.order < $1.order }
         withAnimation(.easeInOut) {
-            for (index, block) in chronological.reversed().enumerated() {
-                block.order = index
-            }
+            renumber(Array(chronological.reversed()))
         }
         refreshDriveEstimates()
     }
 
-    /// Renumbers the survivors to a clean, contiguous `0...n-1` right away —
-    /// leaving a gap is exactly what let a later add's `order` collide with
-    /// an existing one (see `nextScratchOrder`).
+    /// Moves one step one row, in the direction it moves on screen. With
+    /// `sequenceNewestFirst` on, the row above is the step that happens
+    /// *later*, so the swap is done in display order and turned back into
+    /// chronological order afterwards.
+    private func move(_ block: Block, by offset: Int) {
+        var shown = displayBlocks
+        guard let index = shown.firstIndex(where: { $0.uuid == block.uuid }),
+              shown.indices.contains(index + offset) else { return }
+        shown.swapAt(index, index + offset)
+        withAnimation(.easeInOut) {
+            renumber(settings.sequenceNewestFirst ? Array(shown.reversed()) : shown)
+        }
+        refreshDriveEstimates()
+    }
+
+    /// Writes a chronological order back as a contiguous `0...n-1`, with any
+    /// Wait until step pinned to the front: its duration is "time until the
+    /// clock says X", which means nothing behind other steps. Reverse used to
+    /// skip that pin and could leave one stranded at the end.
+    private func renumber(_ chronological: [Block]) {
+        let startAts = chronological.filter { $0.kind == .startAt }
+        let rest = chronological.filter { $0.kind != .startAt }
+        for (index, block) in (startAts + rest).enumerated() {
+            block.order = index
+        }
+    }
+
+    /// Renumbers the survivors to a clean, contiguous `0...n-1` right away.
+    /// A gap or a duplicate `order` is a tied sort key, and SwiftData
+    /// resolves a tie differently between fetches, which is what made steps
+    /// swap places on their own after a delete.
     private func delete(_ block: Block) {
         modelContext.delete(block)
         let remaining = scratchBlocks.filter { $0 !== block }.sorted { $0.order < $1.order }

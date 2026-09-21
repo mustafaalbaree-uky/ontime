@@ -16,14 +16,13 @@ struct QuickBlockEditorSheet: View {
     @Query(filter: #Predicate<Place> { $0.isCurrentLocation }) private var currentLocationPlaces: [Place]
     @Query(filter: #Predicate<Place> { !$0.isCurrentLocation }, sort: \Place.name) private var savedPlaces: [Place]
 
-    /// nil means creating a new scratch block at the given order.
+    /// The scratch sequence, for working out where this step sits when it
+    /// is not a routine's. Same predicate `SequenceComposer` builds from.
+    @Query(filter: #Predicate<Block> { $0.plan == nil && $0.routine == nil }, sort: \Block.order)
+    private var scratchBlocks: [Block]
+
+    /// nil means creating a new block, placed by `position` on save.
     let existingBlock: Block?
-    let newBlockOrder: Int
-    /// Whether this block is (or, for a new block, will become) the first
-    /// step in the sequence — the only position `.startAt` is offered from,
-    /// since "count down to a clock time" only means something for the step
-    /// that's actually running right now.
-    let isFirstPosition: Bool
     /// When set, a new block is owned by this routine's template sequence
     /// instead of being a scratch block. This is what lets the Now screen
     /// and the routine editor share one step editor rather than growing a
@@ -58,6 +57,31 @@ struct QuickBlockEditorSheet: View {
     /// storage in `save()` — this block's own `originPlace` always stays
     /// live if that's what was picked.
     @State private var followsMyLocationForTemplate = true
+    /// Where this step sits in its sequence, counted from 1 in the order the
+    /// steps happen. The editor owns placement because it is the one screen a
+    /// tap on a step always opens: the callers used to pass in a fixed order
+    /// and a fixed "is first" flag, a new step could only ever land at the
+    /// end, and the only way to move one was to delete it and add it again.
+    @State private var position = 1
+
+    /// The rest of the sequence, in order, without this step.
+    private var siblings: [Block] {
+        let all = (existingBlock?.routine ?? owningRoutine)?.orderedBlocks ?? scratchBlocks
+        return all.filter { $0.uuid != existingBlock?.uuid }
+    }
+
+    /// A Wait until step only means something as step 1 (see `move` in
+    /// `ScheduledRoutineEditor`), so when the sequence has one, nothing else
+    /// may be placed in front of it.
+    private var positionRange: ClosedRange<Int> {
+        (siblings.first?.kind == .startAt ? 2 : 1)...(siblings.count + 1)
+    }
+
+    /// The only position `.startAt` is offered from, since "count down to a
+    /// clock time" only means something for the step that runs first.
+    private var isFirstPosition: Bool {
+        position == 1 && !siblings.contains { $0.kind == .startAt }
+    }
 
     private var trimmedName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var originIsCurrentLocation: Bool { originPlace?.isCurrentLocation ?? true }
@@ -75,9 +99,6 @@ struct QuickBlockEditorSheet: View {
     private var validationMessage: String? {
         if kind.isOpenDuration && !allowsOpenDuration {
             return "This sequence already has a free time or walk step."
-        }
-        if kind == .startAt && !isFirstPosition {
-            return "Wait until must be the first step."
         }
         if kind == .drive && !useManualEstimateOnly && destinationPlace == nil {
             return "Choose a destination for the drive."
@@ -109,7 +130,9 @@ struct QuickBlockEditorSheet: View {
             options.append(ChipOption(BlockKind.flex, "Free time"))
             options.append(ChipOption(BlockKind.walk, "Walk"))
         }
-        if isFirstPosition {
+        // Still listed for a step that already is one, or its chip would
+        // vanish from under the selection.
+        if isFirstPosition || kind == .startAt {
             options.append(ChipOption(BlockKind.startAt, "Wait until"))
         }
         return options
@@ -127,6 +150,7 @@ struct QuickBlockEditorSheet: View {
                     if kind == .startAt { startAtSection }
                     if kind == .drive { routeSection }
                     durationSection
+                    if showsPosition { positionSection }
                 }
                 .padding(.horizontal, InkMetric.page)
                 .padding(.top, InkMetric.labelToCard)
@@ -326,6 +350,22 @@ struct QuickBlockEditorSheet: View {
         }
     }
 
+    /// Hidden for a Wait until step, which is pinned first, and when there is
+    /// nowhere else to go.
+    private var showsPosition: Bool {
+        kind != .startAt && positionRange.count > 1
+    }
+
+    private var positionSection: some View {
+        VStack(alignment: .leading, spacing: InkMetric.labelToCard) {
+            SectionLabel("POSITION")
+            InkCard {
+                InkStepperRow(title: "Step", value: $position, range: positionRange,
+                              unit: "of \(siblings.count + 1)")
+            }
+        }
+    }
+
     private var saveBar: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let validationMessage {
@@ -372,7 +412,10 @@ struct QuickBlockEditorSheet: View {
     private func populate() {
         guard !hasPopulated else { return }
         hasPopulated = true
+        position = siblings.count + 1
         if let block = existingBlock {
+            let all = block.routine?.orderedBlocks ?? scratchBlocks
+            position = (all.firstIndex { $0.uuid == block.uuid } ?? siblings.count) + 1
             name = block.name
             kind = block.kind
             minutes = TravelTimeService.shared.manualEstimateMinutes(for: block)
@@ -405,8 +448,16 @@ struct QuickBlockEditorSheet: View {
         let displayName = trimmed.isEmpty ? genericName() : trimmed
         let resolvedOrigin = kind == .drive ? (originPlace ?? currentLocationPlace()) : nil
         let targetComps = kind == .startAt ? Calendar.current.dateComponents([.hour, .minute], from: targetTime) : nil
+        // Read before a new block is inserted: once it belongs to the routine
+        // it shows up in `siblings` itself, and would be placed twice.
+        var sequence = siblings
+        let place = kind == .startAt
+            ? 1
+            : min(max(position, positionRange.lowerBound), positionRange.upperBound)
 
+        let saved: Block
         if let block = existingBlock {
+            saved = block
             block.name = displayName
             block.kind = kind
             block.template = template
@@ -421,7 +472,7 @@ struct QuickBlockEditorSheet: View {
             block.useManualEstimateOnly = kind == .drive ? useManualEstimateOnly : false
         } else {
             let block = Block(
-                order: newBlockOrder,
+                order: sequence.count,
                 name: displayName,
                 kind: kind,
                 template: template,
@@ -437,6 +488,17 @@ struct QuickBlockEditorSheet: View {
             // nil leaves it a scratch block (`plan == nil && routine == nil`),
             // which is what the Now screen queries for.
             block.routine = owningRoutine
+            saved = block
+        }
+
+        // Every step gets a fresh, contiguous `0...n-1`, this one in its
+        // chosen place. A gap or a duplicate `order` is a tied sort key, which
+        // is what made a new step flash into place and then swap somewhere
+        // else on the next redraw as SwiftData resolved the tie differently
+        // between fetches.
+        sequence.insert(saved, at: min(place - 1, sequence.count))
+        for (index, block) in sequence.enumerated() {
+            block.order = index
         }
 
         // Stamp the route back onto the template so the next time this

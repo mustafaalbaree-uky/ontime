@@ -69,16 +69,12 @@ struct ScheduledRoutineEditor: View {
                 case .addStep:
                     QuickBlockEditorSheet(
                         existingBlock: nil,
-                        newBlockOrder: (blocks.map(\.order).max() ?? -1) + 1,
-                        isFirstPosition: blocks.isEmpty,
                         owningRoutine: routine,
                         allowsOpenDuration: !blocks.contains { $0.kind.isOpenDuration }
                     ) {}
                 case .editStep(let block):
                     QuickBlockEditorSheet(
                         existingBlock: block,
-                        newBlockOrder: 0,
-                        isFirstPosition: block.order == (blocks.map(\.order).min() ?? block.order),
                         owningRoutine: routine,
                         allowsOpenDuration: !blocks.contains {
                             $0.kind.isOpenDuration && $0.persistentModelID != block.persistentModelID

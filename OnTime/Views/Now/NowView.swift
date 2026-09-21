@@ -110,18 +110,14 @@ struct NowView: View {
                 ScheduledRoutinesView()
             case .addShortcut(let initialTime):
                 AddShortcutSheet(initialTime: initialTime)
-            case .addStep(let order, let isFirst, let allowsOpenDuration):
+            case .addStep(let allowsOpenDuration):
                 QuickBlockEditorSheet(
                     existingBlock: nil,
-                    newBlockOrder: order,
-                    isFirstPosition: isFirst,
                     allowsOpenDuration: allowsOpenDuration
                 ) {}
-            case .editStep(let block, let isFirst, let allowsOpenDuration):
+            case .editStep(let block, let allowsOpenDuration):
                 QuickBlockEditorSheet(
                     existingBlock: block,
-                    newBlockOrder: 0,
-                    isFirstPosition: isFirst,
                     allowsOpenDuration: allowsOpenDuration
                 ) {}
             }
