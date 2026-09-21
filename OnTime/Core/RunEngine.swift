@@ -220,6 +220,12 @@ final class RunEngine {
     /// rollover passes the due time instead.
     func beginFirstStepNow(at start: Date = Date()) {
         guard let block = currentBlock, block.actualStart == nil else { return }
+        // Started ahead of time by a tap: the alarm set for the start moment
+        // would now ring in the middle of step 1. At the rollover itself it
+        // is left alone, because that is the alarm ringing as intended.
+        if let due = naturalStart, start < due.addingTimeInterval(-5), let p = plan {
+            StartAlarms.cancel(id: p.uuid)
+        }
         block.actualStart = start
         block.status = .active
         run.startedAt = start
@@ -384,6 +390,7 @@ final class RunEngine {
         if let p = plan {
             Task { await LiveActivityManager.end(planId: p.uuid.uuidString) }
             PiSchedule.clearRun(planId: p.uuid.uuidString)
+            StartAlarms.cancel(id: p.uuid)
         }
         // `RunEngineStore.cancel` removes this plan's own pending step
         // notifications right after.

@@ -40,6 +40,29 @@ struct ScheduledRoutineEditor: View {
 
     @State private var sheet: Sheet?
     @State private var confirmingDelete = false
+    /// Set when the toggle was turned on and iOS said no, so the row can say
+    /// why it went back off.
+    @State private var alarmsDenied = false
+
+    /// A real alarm at the routine's start time, see `StartAlarms`. Turning
+    /// it on is the moment iOS asks for permission; a refusal turns it back
+    /// off rather than leaving a switch on that rings nothing. The alarms
+    /// themselves are set by the list's `refresh()` when this sheet closes,
+    /// with every other consequence of an edit.
+    private var startAlarmBinding: Binding<Bool> {
+        Binding(
+            get: { AppSettings.shared.wantsStartAlarm(routine.uuid) },
+            set: { wants in
+                AppSettings.shared.setWantsStartAlarm(wants, for: routine.uuid)
+                guard wants else { alarmsDenied = false; return }
+                Task {
+                    let allowed = await StartAlarms.authorize()
+                    alarmsDenied = !allowed
+                    if !allowed { AppSettings.shared.setWantsStartAlarm(false, for: routine.uuid) }
+                }
+            }
+        )
+    }
 
     private var blocks: [Block] { routine.orderedBlocks }
 
@@ -174,7 +197,21 @@ struct ScheduledRoutineEditor: View {
                 InkStepperRow(title: "Activates", value: $routine.armLeadMinutes,
                               range: 5...maxLeadMinutes, step: leadStep,
                               format: { TimeFormatting.spanWords(TimeInterval($0 * 60)) })
+                if StartAlarms.isSupported {
+                    InkToggleRow(title: "Alarm at start", isOn: startAlarmBinding)
+                }
                 InkToggleRow(title: "Enabled", isOn: $routine.isEnabled)
+            }
+
+            if alarmsDenied {
+                Text("Alarms are off for On Time in iOS Settings.")
+                    .font(InkType.rowMeta)
+                    .foregroundStyle(OnTimeSpectrum.waiting)
+            } else if AppSettings.shared.wantsStartAlarm(routine.uuid),
+                      let occurrence = ScheduleService.nextOccurrence(for: routine) {
+                Text("Rings at \(timeString(occurrence.mustStartAt)), through silent mode and Focus.")
+                    .font(InkType.rowMeta)
+                    .foregroundStyle(OnTimeSpectrum.secondaryText)
             }
 
             // The stepper's number has no meaning without the two clock

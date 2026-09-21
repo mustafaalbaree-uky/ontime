@@ -516,6 +516,28 @@ enum ScheduleService {
                 .compactMap { PiSchedule.armEvent(for: routine, occurrence: $0, calendar: calendar) }
         })
 
+        // A routine that rings an alarm at its start gets one for each of
+        // its next few occurrences, set with the system now so it rings with
+        // the app closed. Not for an occurrence that has already armed and
+        // has no run waiting: that one was started early or stopped, and an
+        // alarm for it would wake him for a routine he is already in or has
+        // called off.
+        StartAlarms.setRoutineAlarms(routines.flatMap { routine -> [StartAlarms.Wanted] in
+            guard AppSettings.shared.wantsStartAlarm(routine.uuid), !routine.orderedBlocks.isEmpty else { return [] }
+            let waiting = openRun(for: routine, in: context).map {
+                $0.currentIndex == 0 && $0.plan?.orderedBlocks.first?.actualStart == nil
+            } ?? false
+            return upcomingOccurrences(for: routine, now: now, calendar: calendar, limit: 3)
+                .filter { !hasArmed(routine, for: $0, calendar: calendar) || waiting }
+                .map {
+                    StartAlarms.Wanted(
+                        id: OccurrenceIdentity.planUUID(routine: routine.uuid, deadline: $0.deadline, calendar: calendar),
+                        fireAt: $0.mustStartAt,
+                        title: routine.name
+                    )
+                }
+        })
+
         var budget = Self.armAlarmBudget
         for (routine, occurrence) in occurrences {
             let count = Notifications.armAlertTimes(from: occurrence.armAt, to: occurrence.mustStartAt).count

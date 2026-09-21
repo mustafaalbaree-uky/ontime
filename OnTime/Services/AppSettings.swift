@@ -41,11 +41,29 @@ final class AppSettings {
         case notificationSoundEnabled
         case leadWarningsEnabled
         case sequenceNewestFirst
+        case startAlarmRoutineIds
     }
 
     /// Whether estimates should lean on the conservative (p80) side of a
     /// template's duration history rather than the median (p50).
     var confidenceIsSafe: Bool = true { didSet { save(.confidenceIsSafe, confidenceIsSafe) } }
+
+    /// The routines (by `uuid`) that ring a real alarm when they have to
+    /// start. See `StartAlarms`. Kept here rather than as a property on
+    /// `ScheduledRoutine` because there is no schema migration: a new model
+    /// field risks rebuilding the store, and a wiped routine list is a far
+    /// worse morning than a setting living in UserDefaults.
+    var startAlarmRoutineIds: [String] = [] { didSet { save(.startAlarmRoutineIds, startAlarmRoutineIds) } }
+
+    func wantsStartAlarm(_ routine: UUID) -> Bool {
+        startAlarmRoutineIds.contains(routine.uuidString)
+    }
+
+    func setWantsStartAlarm(_ wants: Bool, for routine: UUID) {
+        var ids = startAlarmRoutineIds.filter { $0 != routine.uuidString }
+        if wants { ids.append(routine.uuidString) }
+        startAlarmRoutineIds = ids
+    }
 
     var lastLatitude: Double = 0 { didSet { save(.lastLatitude, lastLatitude) } }
     var lastLongitude: Double = 0 { didSet { save(.lastLongitude, lastLongitude) } }
@@ -177,6 +195,7 @@ final class AppSettings {
         notificationSoundEnabled = bool(.notificationSoundEnabled, default: notificationSoundEnabled)
         leadWarningsEnabled = bool(.leadWarningsEnabled, default: leadWarningsEnabled)
         sequenceNewestFirst = bool(.sequenceNewestFirst, default: sequenceNewestFirst)
+        startAlarmRoutineIds = d.stringArray(forKey: Key.startAlarmRoutineIds.rawValue) ?? []
 
         loading = false
     }

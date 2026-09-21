@@ -26,6 +26,8 @@
 	<array>
 		<string>shortcuts</string>
 	</array>
+	<key>NSAlarmKitUsageDescription</key>
+	<string>On Time rings an alarm when a routine has to start.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSExceptionDomains</key>

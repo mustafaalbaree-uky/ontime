@@ -22,6 +22,9 @@ struct LiveRunPage: View {
     @Environment(\.modelContext) private var modelContext
     @State private var engine: RunEngine?
     @State private var confirmingCancel = false
+    /// When this run's start alarm will ring, nil when none is set.
+    @State private var alarmSetFor: Date?
+    @State private var alarmRefused = false
 
     var body: some View {
         ScrollView {
@@ -236,6 +239,11 @@ struct LiveRunPage: View {
                     Label("Start Step 1 Now", systemImage: "play.fill")
                 }
                 .buttonStyle(SpectrumButtonStyle())
+
+                if StartAlarms.isSupported, let start = engine.naturalStart,
+                   let planId = engine.plan?.uuid, start > engine.now {
+                    alarmButton(planId: planId, start: start, title: engine.plan?.name ?? "On Time")
+                }
             } else {
                 Button {
                     engine.advanceStep()
@@ -254,6 +262,38 @@ struct LiveRunPage: View {
                 Label("Steps", systemImage: "list.bullet")
             }
             .buttonStyle(SpectrumButtonStyle(prominent: false))
+        }
+    }
+
+    /// A real alarm for the moment this run has to start (`StartAlarms`).
+    /// The button states what is true: no alarm and the time it would ring,
+    /// or the time one is set for. A routine with "Alarm at start" on
+    /// arrives here with its alarm already set, under the same id.
+    private func alarmButton(planId: UUID, start: Date, title: String) -> some View {
+        Button {
+            if alarmSetFor != nil {
+                StartAlarms.cancel(id: planId)
+                alarmSetFor = nil
+            } else {
+                Task {
+                    if await StartAlarms.set(id: planId, fireAt: start, title: title) {
+                        alarmSetFor = start
+                    } else {
+                        alarmRefused = true
+                    }
+                }
+            }
+        } label: {
+            Label(alarmSetFor.map { "Alarm set for \(TimeFormatting.clockString($0))" }
+                  ?? "Set alarm for \(TimeFormatting.clockString(start))",
+                  systemImage: alarmSetFor == nil ? "alarm" : "alarm.fill")
+        }
+        .buttonStyle(SpectrumButtonStyle(prominent: false))
+        .onAppear { alarmSetFor = StartAlarms.fireDate(id: planId) }
+        .alert("Alarms are off", isPresented: $alarmRefused) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Alarms are off for On Time in iOS Settings.")
         }
     }
 
