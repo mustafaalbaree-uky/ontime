@@ -145,6 +145,29 @@ button and is still where a sequence is edited mid-run.
 page out from under the pager, and an unclamped selection lands on a blank
 pane.
 
+**The builder keeps its steps.** `SequenceComposer.startRun` hands
+`RunLauncher` copies of the scratch blocks, the way `ScheduleService.arm`
+copies a routine's. It used to hand over the scratch blocks themselves, so
+Start emptied the builder, tomorrow's identical sequence was typed in again,
+and stopping a run started by mistake lost the steps with it. Clear (an
+`.alert`, because this is a page of the pager) is the way to empty it.
+
+**The step editor owns a step's position.** `QuickBlockEditorSheet` works out
+the sequence it is editing (the routine's blocks or the scratch blocks) and
+has a Position row; builder rows also have Move Up and Move Down in their long
+press menu. Callers no longer pass an order or an "is first" flag, which is
+why a new step could only ever land at the end. Every save and move rewrites
+orders to a contiguous 0 to n-1, and a Wait until step cannot be displaced
+from first. Builder, routine editor and run rows show each step's clock time,
+from the same solve as the headline, instead of "STEP n".
+
+**Nothing in the Scheduled list is swipe only.** Start Now, Skip Today (and
+Undo Skip), Open and the "be done by" time are on the card; the swipes remain
+as shortcuts. Start Now and Open post `OnTimeShared.openRunNotification` and
+dismiss, so Now pages to that countdown the way a notification tap does. The
+list's sheet is one route enum (`edit`, `time`), and every dismissal runs
+`refresh()`, which is what carries an edit to today's occurrence.
+
 **Domain model.** `ScheduledRoutine` is a reusable sequence of `Block`s plus
 one anchor time and the weekdays it runs — no "anchor kind", no prayer
 lookup. A `Plan` is a concrete instance working toward one `deadline`; its

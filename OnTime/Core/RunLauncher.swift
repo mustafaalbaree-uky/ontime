@@ -9,8 +9,10 @@ import SwiftData
 /// simply won't show up there — routing them all through here is what
 /// guarantees that.
 ///
-/// Current callers: `NowView.startRun` (the Start button) and
-/// `ScheduleService.arm` (a scheduled routine waking itself up).
+/// Current callers: `SequenceComposer.startRun` (the Start button) and
+/// `ScheduleService.arm` (a scheduled routine waking itself up). Both hand
+/// over copies (`Block.copyForSpawn`), never the rows the sequence was
+/// built from.
 @MainActor
 enum RunLauncher {
     /// `blocks` must already be inserted into `context` (or about to be —
