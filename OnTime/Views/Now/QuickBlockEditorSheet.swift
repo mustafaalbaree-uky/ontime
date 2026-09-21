@@ -334,11 +334,9 @@ struct QuickBlockEditorSheet: View {
                     if showsDuration {
                         InkRow { DurationScrubber(minutes: $minutes) }
                     }
-                    InkToggleRow(title: "Advance automatically", isOn: $isOpenEnded)
+                    InkToggleRow(title: "Next step starts by itself", isOn: $isOpenEnded)
                 }
-                Text(isOpenEnded
-                     ? "Advances when automatic advance is on for the countdown."
-                     : "Waits for you to mark this step complete.")
+                Text(advanceCaption)
                     .font(InkType.rowMeta)
                     .foregroundStyle(OnTimeSpectrum.secondaryText)
             }
@@ -348,6 +346,22 @@ struct QuickBlockEditorSheet: View {
                     .foregroundStyle(OnTimeSpectrum.secondaryText)
             }
         }
+    }
+
+    /// What the toggle above it does, given the switch that outranks it.
+    ///
+    /// A step only moves on by itself when this toggle *and* Settings' "Auto
+    /// advance steps" are both on (`RunEngine.autoAdvanceEligible`). The old
+    /// caption, "Advances when automatic advance is on for the countdown",
+    /// named neither the switch nor where it lives, so with Settings off this
+    /// toggle read as on and did nothing.
+    private var advanceCaption: String {
+        guard isOpenEnded else {
+            return "This step waits for Next Step, even with Auto advance steps on in Settings."
+        }
+        return AppSettings.shared.autoAdvanceEnabled
+            ? "When this step's time is up, the next one starts."
+            : "Auto advance steps is off in Settings, so this step waits for Next Step."
     }
 
     /// Hidden for a Wait until step, which is pinned first, and when there is
