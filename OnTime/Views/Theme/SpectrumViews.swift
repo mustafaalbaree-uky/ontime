@@ -1,41 +1,20 @@
 import SwiftUI
 
-/// The moving half of the house style. `Shared/OnTimeSpectrum.swift` holds
-/// the colours, because the widget compiles that too; everything here
-/// animates, so it is app-only — a Live Activity gets the same gradient
-/// standing still.
+/// The card, the button style, the time bar and the page dots.
 ///
-/// Motion is one slow rotation, driven by a single implicit SwiftUI
-/// animation on a `rotationEffect` rather than a `TimelineView` redrawing
-/// the whole subtree every frame. The rotation runs on the render server,
-/// so it costs nothing per frame in the app process and keeps turning while
-/// the rest of the screen sits idle.
-private struct SpectrumSpin: ViewModifier {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var spinning = false
-    var seconds: Double
-
-    func body(content: Content) -> some View {
-        content
-            .rotationEffect(.degrees(spinning ? 360 : 0))
-            .animation(reduceMotion ? nil : .linear(duration: seconds).repeatForever(autoreverses: false),
-                       value: spinning)
-            .onAppear {
-                // Reduce Motion holds the same gradient still rather than
-                // falling back to a flat colour: the look survives, only the
-                // movement stops.
-                guard !reduceMotion else { return }
-                spinning = true
-            }
-    }
-}
-
-extension View {
-    /// Turns the receiver slowly and forever. Seconds is a full turn.
-    func spectrumSpin(seconds: Double = 14) -> some View {
-        modifier(SpectrumSpin(seconds: seconds))
-    }
-}
+/// This file used to hold the app's one animated piece, `SpectrumText`: a
+/// slowly rotating rainbow fill on the composer's Final Time number, with the
+/// `SpectrumSpin` modifier that turned it. He asked for the rainbow numbers
+/// gone on 21 Sep 2026 and nothing else used either, so both are deleted
+/// rather than left where a later change could reach for them. Nothing in the
+/// product is spectrum filled. The names `spectrumCard` and
+/// `SpectrumButtonStyle` are history, not a description.
+///
+/// One lesson from `SpectrumText` outlives it: `.mask` and `.blur` clip what
+/// is drawn, not what receives touches. Its 900 pt gradient, masked to the
+/// glyphs, stayed a 900 pt tap target inside the Final Time button and
+/// swallowed every tap on the Now page. Any decoration larger than the thing
+/// it decorates needs `.allowsHitTesting(false)`.
 
 /// A flat horizontal gauge: how much of a span is left, drawn left to right.
 ///
@@ -71,49 +50,6 @@ struct TimeBar: View {
         .clipShape(RoundedRectangle(cornerRadius: height / 2))
         .animation(.easeInOut(duration: 0.4), value: remaining)
         .accessibilityHidden(true)
-    }
-}
-
-/// Text filled with the moving spectrum. Used on exactly one thing in the
-/// product: the composer's Final Time number. It is set like every other
-/// large numeral (`onTimeNumeral`: thin, tight, fixed width digits), so the
-/// fill is the only thing that sets it apart.
-struct SpectrumText: View {
-    var text: String
-    var size: CGFloat
-    /// Late numbers are not decorated. Red means red.
-    var isLate: Bool = false
-
-    var body: some View {
-        Text(text)
-            .onTimeNumeral(size)
-            .foregroundStyle(.clear)
-            .overlay {
-                Group {
-                    if isLate {
-                        OnTimeSpectrum.late
-                    } else {
-                        // Deliberately far larger than the text: the gradient
-                        // has to be square and oversized so that rotating it
-                        // never sweeps an uncovered corner across the glyphs.
-                        OnTimeSpectrum.linear()
-                            .frame(width: 900, height: 900)
-                            .spectrumSpin(seconds: 22)
-                    }
-                }
-                // Load-bearing, and the whole reason the app's buttons went
-                // dead. `.mask` below clips what is *drawn*; it does not clip
-                // what receives touches. So this 900pt square stayed live for
-                // hit testing, and inside a `Button` label it made that
-                // button's tap target cover the entire screen — every tap on
-                // the Now page landed on Final Time no matter what was under
-                // the finger. Decoration must never be touchable.
-                .allowsHitTesting(false)
-            }
-            .mask {
-                Text(text)
-                    .onTimeNumeral(size)
-            }
     }
 }
 

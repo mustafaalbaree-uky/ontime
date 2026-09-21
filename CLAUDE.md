@@ -65,7 +65,7 @@ OnTime/Services/  Singletons wrapping system frameworks + app-wide state:
 OnTime/Views/     Now/ (the front screen pager), Countdowns/ (the Active
                    tab), Routines/ (the Scheduled sheet), Run/ (live
                    countdown), Settings/, Templates/ (learned steps),
-                   Theme/ (the animated spectrum components), Components/.
+                   Theme/ (the type scale, cards, rows and controls), Components/.
 OnTimeWidget/     Live Activity UI (Dynamic Island / Lock Screen).
 Shared/           Compiled into both the app and the widget extension —
                    ActivityAttributes, App Intents, OnTimeSpectrum (the
@@ -137,10 +137,12 @@ Four rules underneath it that the restyle did not change.
   seen wearing something; it is never text, never an icon, never the tab bar.
   Nothing else on any screen is coloured, and a *kind* is never coloured, only
   a state.
-- **The Final Time number on the composer is the only spectrum element in the
-  product.** `SpectrumText` fills it, in the thin numeral, and nothing else
-  calls that view. The per step hue and the green to red ramp are gone from
-  the palette entirely, so a caller cannot reach for them by accident.
+- **Nothing in the product is spectrum filled.** The composer's Final Time
+  number was the one animated rainbow element (`SpectrumText`); on 21 Sep 2026
+  he said "I also don't want the rainbow numbers", so it is plain white and
+  `SpectrumText` and its spin modifier are deleted. The per step hue and the
+  green to red ramp went earlier. Do not add a gradient or a rainbow anywhere
+  without him asking for one.
 - **`List` and `Form` are not used for anything the user sees.** On a forced
   dark scheme they render grey grouped panels, grey section headers and a
   tint on every value, which is a different product beside this one. A screen
@@ -187,6 +189,12 @@ button and is still where a sequence is edited mid-run.
 `page` is clamped whenever `openRuns.count` changes — a run finishing pulls a
 page out from under the pager, and an unclamped selection lands on a blank
 pane.
+
+**The composer has no armed routine banner.** `ArmedRoutineBanner` sat at
+the top of the builder whenever a scheduled routine was armed or running, with
+a pulsing dot. It dates from before Now was a pager: every open run has its
+own page now, and the top bar's "1 running" button goes to it. He asked for the
+bar gone on 21 Sep 2026 and the file is deleted.
 
 **The builder keeps its steps.** `SequenceComposer.startRun` hands
 `RunLauncher` copies of the scratch blocks, the way `ScheduleService.arm`
@@ -548,14 +556,15 @@ sheet presentation plumbing (both real bugs, neither the cause). The clue
 that settled it was "it used to work before," pointing at the new decoration
 rather than the old controls.
 
-**One spectrum element in the product means one.** The first pass put a
+**How the spectrum went from everywhere to nowhere.** The first pass put a
 gradient border on the Start button, the Steps button, the Stop button, the
 "+", the shortcut chips and the Live Activity's Complete button as well as on
 each screen's hero, and the result was noise: nothing was emphasised because
 everything was, and the colour stopped being able to mean anything. Then even
 one per screen was too many, because a run is the screen you read while doing
-something else. So the hero is the composer's Final Time number and nothing
-else. Buttons are plain: white filled or raised surface (`SpectrumButtonStyle`).
+something else. So the hero became the composer's Final Time number and
+nothing else, and then he asked for that gone too. Buttons are plain: white
+filled or raised surface (`SpectrumButtonStyle`, a name that is now history).
 
 Two specific things were wrong with the per step hue, not just loud.
 `OnTimeSpectrum.step` was a hue by index starting at 0, so **the first step of

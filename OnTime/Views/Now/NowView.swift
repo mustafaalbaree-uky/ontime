@@ -85,10 +85,6 @@ struct NowView: View {
                         // deterministic either way.
                         goTo(runId: run.uuid)
                     },
-                    onOpenRun: { run in
-                        guard let index = openRuns.firstIndex(where: { $0.uuid == run.uuid }) else { return }
-                        withAnimation(.easeInOut) { page = index }
-                    },
                     route: $composerRoute
                 )
                 .tag(composerIndex)

@@ -53,9 +53,6 @@ enum ComposerRoute: Identifiable {
 struct SequenceComposer: View {
     /// Called once a `Run` exists, so the pager can slide onto it.
     var onStarted: (Run) -> Void
-    /// Called when the armed-routine banner is tapped: the run already has a
-    /// page of its own, so this scrolls to it rather than pushing a cover.
-    var onOpenRun: (Run) -> Void
 
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
@@ -143,7 +140,6 @@ struct SequenceComposer: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                ArmedRoutineBanner(now: now) { onOpenRun($0) }
                 header
                 sequenceSection
                 if settings.developerModeEnabled {
@@ -210,10 +206,13 @@ struct SequenceComposer: View {
             Button {
                 route = .finalTime
             } label: {
-                SpectrumText(
-                    text: timeString(deadlineTimeBinding.wrappedValue),
-                    size: InkType.displaySize
-                )
+                // Plain white, like every other number. This was the app's
+                // one animated rainbow fill (`SpectrumText`); he asked for it
+                // gone on 21 Sep 2026, so nothing in the product is spectrum
+                // filled now.
+                Text(timeString(deadlineTimeBinding.wrappedValue))
+                    .onTimeNumeral(InkType.displaySize)
+                    .foregroundStyle(OnTimeSpectrum.primaryText)
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.vertical, 18)
                 .spectrumCard()
