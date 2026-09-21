@@ -259,6 +259,7 @@ final class RunEngine {
             b.actualStart = cursor
             b.actualEnd = boundary
             b.status = .done
+            logOnTimeCompletion(of: b, minutes: minutes, at: boundary)
             cursor = boundary
             idx += 1
 
@@ -289,10 +290,31 @@ final class RunEngine {
         return true
     }
 
+    /// A step that ran out its estimate and moved on by itself is recorded
+    /// as having taken its estimate.
+    ///
+    /// It used to record nothing, on the reasoning that nobody observed when
+    /// the step really ended. But the only other way a sample gets written is
+    /// a tap in `advanceStep`, and with auto advance on a tap can only land
+    /// *before* the estimate runs out. So every sample a template ever
+    /// collected was shorter than its estimate, the learned duration could
+    /// only fall, and the solver scheduled against it: start times crept
+    /// later week by week with nothing on screen saying why. An on time
+    /// completion is the evidence that the estimate was enough, and it is
+    /// what stops a few early taps from dragging the p80 down.
+    ///
+    /// What this cannot learn is a step that really took longer, because the
+    /// app has moved on by then and sees nothing. Only a step set to wait for
+    /// a tap measures that.
+    private func logOnTimeCompletion(of block: Block, minutes: Int, at completedAt: Date) {
+        guard !block.kind.isOpenDuration, let template = block.template else { return }
+        modelContext.insert(DurationSample(minutes: max(1, minutes), recordedAt: completedAt, template: template))
+    }
+
     /// Every caller of this is a tap (button, Live Activity intent, or
     /// notification action) — auto advances flow through `reconcile`, which
-    /// stamps blocks directly, which is why every manual advance logs a
-    /// `DurationSample`. (An `auto:` parameter used to exist for a skip
+    /// stamps blocks directly and logs through `logOnTimeCompletion`; every
+    /// manual advance logs the measured `DurationSample` here. (An `auto:` parameter used to exist for a skip
     /// branch nothing ever exercised.)
     func advanceStep(at completedAt: Date = Date()) {
         // A stale "Next Step" tap can arrive after the run already finished
@@ -361,6 +383,7 @@ final class RunEngine {
         WalkTracker.shared.end(for: run.uuid)
         if let p = plan {
             Task { await LiveActivityManager.end(planId: p.uuid.uuidString) }
+            PiSchedule.clearRun(planId: p.uuid.uuidString)
         }
         // `RunEngineStore.cancel` removes this plan's own pending step
         // notifications right after.
@@ -509,6 +532,13 @@ final class RunEngine {
     /// out loud rather than calling it just another step boundary.
     func targetLabel(for block: Block) -> String {
         if isWaitingToStart { return "Start by" }
+        return stepLabel(for: block)
+    }
+
+    /// The label for a step that is running, whatever the run is doing now.
+    /// `projectedActivitySteps` labels steps that have not begun yet, some
+    /// of them while the run is still waiting to start.
+    private func stepLabel(for block: Block) -> String {
         if block.kind == .drive { return "Arrive by" }
         if block.kind == .walk {
             return WalkTracker.shared.phase == .returning ? "Home by" : "Turn back by"
@@ -524,6 +554,111 @@ final class RunEngine {
     /// unable to end anything.
     func endsRunAtTarget(_ block: Block) -> Bool {
         block.order >= blocks.count - 1 && autoAdvanceEligible(block)
+    }
+
+    // MARK: - Projection for the Pi
+
+    /// Every moment from now on at which the Live Activity has to change
+    /// with nobody touching the phone, and what it has to change to.
+    ///
+    /// The app is suspended for most of a run, so it cannot make these
+    /// changes: the Island sat on a finished step, went red and counted up
+    /// until the app was opened. `PiSchedule` hands this list to the Pi,
+    /// which delivers each state by push at its time.
+    ///
+    /// It is `reconcile()` run forward in imagination: the same walk, the
+    /// same estimates, the same stop at the first step that waits for a tap
+    /// or has no duration to run out. Past that step nothing is projected,
+    /// because "over, waiting on you" is then the truth and the staleness
+    /// re-render already shows it. While waiting, the first entry is the
+    /// rollover into step 1 at `naturalStart`.
+    ///
+    /// A projected target comes from the solution, the same place
+    /// `leaveByDate` reads it, so a pushed step and the step the app would
+    /// have shown cannot disagree. An auto advanced step ends exactly on its
+    /// estimate, which leaves the solution as it was, so today's solution is
+    /// still right for steps that have not begun.
+    func projectedActivitySteps() -> [PiSchedule.RunStep] {
+        guard !isFinished, let p = plan, !blocks.isEmpty else { return [] }
+
+        var steps: [PiSchedule.RunStep] = []
+        var index = run.currentIndex
+        var cursor: Date
+        let solution: Solution?
+
+        if isWaitingToStart {
+            guard let start = naturalStart else { return [] }
+            solution = projectedSolution(startingAt: start)
+            cursor = start
+            steps.append(.init(fireAt: start,
+                               state: projectedState(index: 0, segmentStart: start, solution: solution, plan: p),
+                               endsRun: false))
+        } else {
+            guard let start = currentBlock?.actualStart else { return [] }
+            solution = currentSolution
+            cursor = start
+        }
+
+        while blocks.indices.contains(index), autoAdvanceEligible(blocks[index]) {
+            let minutes = TravelTimeService.shared.manualEstimateMinutes(for: blocks[index], now: now)
+            let boundary = cursor.addingTimeInterval(TimeInterval(minutes * 60))
+            index += 1
+            cursor = boundary
+            // A boundary already behind us is `reconcile`'s to collapse on
+            // the next tick; it is not a future change.
+            guard boundary > now else { continue }
+            if blocks.indices.contains(index) {
+                steps.append(.init(fireAt: boundary,
+                                   state: projectedState(index: index, segmentStart: boundary, solution: solution, plan: p),
+                                   endsRun: false))
+            } else {
+                var finished = projectedState(index: blocks.count - 1, segmentStart: boundary, solution: solution, plan: p)
+                finished.isFinished = true
+                steps.append(.init(fireAt: boundary, state: finished, endsRun: true))
+            }
+        }
+        return steps
+    }
+
+    /// The solution `recomputeSolution` will produce at the moment a waiting
+    /// run rolls into step 1: nothing has an actual time yet and the run
+    /// starts at `start`.
+    private func projectedSolution(startingAt start: Date) -> Solution? {
+        guard let p = plan else { return nil }
+        let durations: [BlockDuration] = blocks.map { block in
+            block.kind.isOpenDuration
+                ? .flex
+                : .known(TimeInterval(TravelTimeService.shared.manualEstimateMinutes(for: block, now: now) * 60))
+        }
+        return try? Solver.solve(SolverInput(durations: durations, deadline: p.deadline,
+                                             start: start, pinnedFlex: nil))
+    }
+
+    private func projectedState(index: Int, segmentStart: Date, solution: Solution?,
+                                plan p: Plan) -> OnTimeActivityAttributes.ContentState {
+        let block = blocks[index]
+        var target = p.deadline
+        if let sched = solution?.blocks.first(where: { $0.index == block.order }) {
+            switch sched.constraint {
+            case .hardLeaveBy(let date): target = date
+            case .flexAbsorbs: target = sched.scheduledEnd
+            }
+        }
+        return .init(
+            planName: p.name,
+            blockName: block.name,
+            blockIndex: index,
+            totalBlocks: blocks.count,
+            targetLeaveBy: target,
+            segmentStart: segmentStart,
+            isFlex: block.kind.isOpenDuration,
+            symbol: block.template?.symbol ?? block.kind.defaultSymbol,
+            isWaiting: false,
+            // A walk entered by push has no tracker running behind it, so
+            // there is no turnaround to count to, only the time to be back.
+            targetLabel: (block.kind == .walk ? "Home by" : stepLabel(for: block)) + " ",
+            endsRunAtTarget: endsRunAtTarget(block)
+        )
     }
 
     func syncLiveActivityAndNotifications() {
@@ -551,8 +686,11 @@ final class RunEngine {
             // engine (and its whole Run/Plan/Block graph) in the store
             // until a RunView for this exact run happens to appear.
             RunEngineStore.shared.retire(run)
+            PiSchedule.clearRun(planId: planId)
             return
         }
+
+        PiSchedule.publishRun(planId: planId, steps: projectedActivitySteps())
 
         if !isWaitingToStart, let sol = currentSolution {
             Notifications.shared.scheduleRunNotifications(for: p, solution: sol)

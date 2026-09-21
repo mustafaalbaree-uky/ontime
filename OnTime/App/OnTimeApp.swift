@@ -41,7 +41,7 @@ struct OnTimeApp: App {
                 // that turns an upcoming routine into a live run — the one
                 // change the Home Screen widget most needs to hear about.
                 WidgetBridge.shared.configure(modelContext: launchContainer.mainContext)
-                PushTokens.startObserving()
+                PushTokens.startObserving(modelContext: launchContainer.mainContext)
             }
             Task { @MainActor in
                 _ = await Notifications.shared.requestAuthorization()

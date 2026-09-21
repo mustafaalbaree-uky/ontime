@@ -7,7 +7,7 @@ exact APNs payload to deliver then. This process does no scheduling math and
 knows nothing about routines: it holds the list and watches the clock. An
 upload replaces the whole list.
 
-    POST /schedule   {"pushToStartToken": hex, "events": [{id, fireAt, expiresAt, aps}]}
+    POST /schedule   {"pushToStartToken": hex, "events": [{id, fireAt, expiresAt, aps, token?}]}
     GET  /status     what is pending, and the last sends with APNs's answers
 
 Listens on the Tailscale address only, so nothing off the tailnet can reach
@@ -96,6 +96,12 @@ def deliver(device_token: str, aps: dict) -> str:
     return (result.stdout + result.stderr).strip()
 
 
+def describe(event: dict) -> str:
+    """A label for an event with no alert: which step an update moves to."""
+    state = event["aps"].get("content-state", {})
+    return f"{event['aps'].get('event', '?')}: {state.get('planName', '')} / {state.get('blockName', '')}"
+
+
 def fire_due() -> None:
     now = time.time()
     with lock:
@@ -107,9 +113,13 @@ def fire_due() -> None:
             if event["fireAt"] <= now < event["expiresAt"] and event["id"] not in sent_ids
         ]
         token = schedule.get("pushToStartToken")
-    for event in due:
-        answer = deliver(token, event["aps"])
-        title = event["aps"].get("alert", {}).get("title", "")
+    # In time order: a Pi that was down through two step changes sends both
+    # when it comes back, and the phone has to end on the later one.
+    for event in sorted(due, key=lambda e: e["fireAt"]):
+        # A start goes to the push to start token the upload carries. An
+        # update or an end names the token of the activity it changes.
+        answer = deliver(event.get("token") or token, event["aps"])
+        title = event["aps"].get("alert", {}).get("title", "") or describe(event)
         log(f"sent {event['id']} ({title}): {answer}")
         with lock:
             sent = read_json(SENT_PATH, [])
@@ -117,7 +127,7 @@ def fire_due() -> None:
             # second until it expires helps nobody, and the answer is in
             # /status for whoever comes looking.
             sent.append({"id": event["id"], "title": title, "at": now, "answer": answer})
-            write_json(SENT_PATH, sent[-50:])
+            write_json(SENT_PATH, sent[-300:])
 
 
 def clock_loop() -> None:
@@ -171,7 +181,7 @@ class Handler(BaseHTTPRequestHandler):
             "scheduleReceived": stamp(schedule["receivedAt"]) if "receivedAt" in schedule else None,
             "hasToken": bool(schedule.get("pushToStartToken")),
             "pending": [
-                {"title": e["aps"].get("alert", {}).get("title", ""), "fireAt": stamp(e["fireAt"]), "id": e["id"]}
+                {"title": e["aps"].get("alert", {}).get("title", "") or describe(e), "fireAt": stamp(e["fireAt"]), "id": e["id"]}
                 for e in sorted(schedule.get("events", []), key=lambda e: e["fireAt"])
                 if e["id"] not in sent_ids
             ],

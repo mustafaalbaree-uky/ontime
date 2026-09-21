@@ -123,9 +123,13 @@ enum LiveActivityManager {
         )
 
         do {
+            // `pushType: .token` is what gives this activity a push token at
+            // all. Without one the Pi cannot move it to the next step while
+            // the app is suspended. See `PushTokens.observeActivities`.
             activities[planId] = try Activity.request(
                 attributes: attributes,
-                content: .init(state: state, staleDate: staleDate(for: targetLeaveBy))
+                content: .init(state: state, staleDate: staleDate(for: targetLeaveBy)),
+                pushType: .token
             )
             return .started
         } catch {

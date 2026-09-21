@@ -1,5 +1,6 @@
 import ActivityKit
 import Foundation
+import SwiftData
 
 /// The token that lets a server start this app's Live Activity while the app
 /// is not running.
@@ -17,7 +18,12 @@ import Foundation
 enum PushTokens {
     static let fileName = "push-tokens.json"
 
-    static func startObserving() {
+    private static var modelContext: ModelContext?
+    private static var trackedActivityIds: Set<String> = []
+
+    static func startObserving(modelContext: ModelContext) {
+        self.modelContext = modelContext
+        observeActivities()
         guard #available(iOS 17.2, *) else { return }
         // The sequence only emits on a change, which on most launches is
         // never, so the value the system already holds is read first.
@@ -31,6 +37,53 @@ enum PushTokens {
         }
     }
 
+    // MARK: - Each activity's own token
+
+    /// Changing an activity that is already up (the next step, the end of
+    /// the run) is addressed to that activity's own token, not to the push
+    /// to start token. Every activity is followed from here, whoever started
+    /// it: `LiveActivityManager.start` in the foreground, or the Pi by push.
+    private static func observeActivities() {
+        for activity in Activity<OnTimeActivityAttributes>.activities {
+            track(activity)
+        }
+        Task {
+            for await activity in Activity<OnTimeActivityAttributes>.activityUpdates {
+                track(activity)
+            }
+        }
+    }
+
+    private static func track(_ activity: Activity<OnTimeActivityAttributes>) {
+        guard trackedActivityIds.insert(activity.id).inserted else { return }
+        let planId = activity.attributes.planId
+        if let token = activity.pushToken {
+            PiSchedule.setActivityToken(planId: planId, hex: hex(token))
+        }
+        Task {
+            for await token in activity.pushTokenUpdates {
+                PiSchedule.setActivityToken(planId: planId, hex: hex(token))
+            }
+        }
+
+        // An activity the Pi just started has no run behind it yet, and this
+        // may be a background launch with no view hierarchy to run the usual
+        // foreground catch up. Arming here, in the few seconds the push buys,
+        // mints the run, and the engine's first sync hands the Pi the step
+        // changes for the rest of the routine. For an activity the app
+        // started itself this is the same idempotent pass as any foreground.
+        if let modelContext {
+            ScheduleService.catchUp(in: modelContext)
+            try? modelContext.save()
+        }
+    }
+
+    private static func hex(_ token: Data) -> String {
+        token.map { String(format: "%02x", $0) }.joined()
+    }
+
+    // MARK: - The push to start token
+
     private static let defaultsKey = "pushToStartTokenHex"
 
     /// The last token the system handed over, kept across launches because
@@ -40,13 +93,13 @@ enum PushTokens {
     }
 
     private static func record(pushToStart token: Data) {
-        let hex = token.map { String(format: "%02x", $0) }.joined()
-        if hex != pushToStartHex {
-            UserDefaults.standard.set(hex, forKey: defaultsKey)
+        let value = hex(token)
+        if value != pushToStartHex {
+            UserDefaults.standard.set(value, forKey: defaultsKey)
             PiSchedule.tokenChanged()
         }
         let payload: [String: String] = [
-            "pushToStart": hex,
+            "pushToStart": value,
             "updatedAt": ISO8601DateFormatter().string(from: Date())
         ]
         guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,

@@ -117,6 +117,7 @@ final class RunEngineStore {
         }
         if let p = run.plan {
             Notifications.shared.cancelRunNotifications(planId: p.uuid.uuidString)
+            PiSchedule.clearRun(planId: p.uuid.uuidString)
         }
         WidgetBridge.shared.setNeedsRefresh()
     }

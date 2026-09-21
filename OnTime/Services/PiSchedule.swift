@@ -34,26 +34,41 @@ enum PiSchedule {
         /// Unix seconds. A Pi that was down at `fireAt` still sends when it
         /// comes back, unless this has passed.
         let expiresAt: Double
+        /// The activity's own push token, for an update or an end. nil for a
+        /// start, which goes to the push to start token the upload carries.
+        var token: String? = nil
         let aps: Aps
     }
 
-    /// The `aps` dictionary of an ActivityKit "start" push, minus
-    /// `timestamp`, which has to be the moment of sending and is the Pi's to
-    /// fill in.
+    /// One future change to a running activity, as `RunEngine` projects it.
+    struct RunStep: Equatable {
+        let fireAt: Date
+        let state: OnTimeActivityAttributes.ContentState
+        /// The last step ran out: end the activity showing this state.
+        let endsRun: Bool
+    }
+
+    /// The `aps` dictionary of an ActivityKit push, minus `timestamp`, which
+    /// has to be the moment of sending and is the Pi's to fill in. A start
+    /// carries the attributes and an alert; an update or an end carries
+    /// neither, and an optional that is nil is left out of the JSON.
     struct Aps: Encodable {
-        let event = "start"
+        var event = "start"
         /// Encoded by the same default `JSONEncoder` date strategy that
         /// ActivityKit's decoder expects (seconds since 2001), which is why
         /// this is the real `ContentState` and not a hand-built dictionary.
         let contentState: OnTimeActivityAttributes.ContentState
         /// Unix seconds, unlike the dates inside `contentState`: this field
         /// belongs to APNs, not to the app's Codable type.
-        let staleDate: Int
-        let attributesType = "OnTimeActivityAttributes"
-        let attributes: OnTimeActivityAttributes
+        var staleDate: Int? = nil
+        /// Unix seconds. On an end, when the finished plate leaves the
+        /// Lock Screen.
+        var dismissalDate: Int? = nil
+        var attributesType: String? = nil
+        var attributes: OnTimeActivityAttributes? = nil
         /// Required on a start push. No `sound`: the local arm notification
         /// at the same moment already carries the sound and the Start action.
-        let alert: Alert
+        var alert: Alert? = nil
 
         struct Alert: Encodable {
             let title: String
@@ -64,6 +79,7 @@ enum PiSchedule {
             case event
             case contentState = "content-state"
             case staleDate = "stale-date"
+            case dismissalDate = "dismissal-date"
             case attributesType = "attributes-type"
             case attributes
             case alert
@@ -79,7 +95,20 @@ enum PiSchedule {
     /// on every foreground and the schedule is identical for nearly all of
     /// them.
     private static var lastAccepted: Data?
-    private static var lastEvents: [Event] = []
+    private static var armEvents: [Event] = []
+    /// Projected step changes per open run, keyed by `planId`.
+    private static var runSteps: [String: [RunStep]] = [:]
+    /// Each live activity's own push token, keyed by `planId`. A run's steps
+    /// are only uploaded once its activity has one.
+    private static var activityTokens: [String: String] = [:]
+    private static var isSending = false
+    private static var needsResend = false
+
+    /// How long before a boundary the Pi sends. The activity goes stale at
+    /// the boundary itself and re-renders as over, so a push that arrives a
+    /// moment after it shows a flash of red first. One that arrives a moment
+    /// before shows the next step's countdown about to begin.
+    private static let pushLead: TimeInterval = 2
 
     /// The start push for one routine occurrence: the "until start" plate
     /// the app itself would show on arming, raised at `armAt`.
@@ -109,6 +138,7 @@ enum PiSchedule {
             aps: Aps(
                 contentState: state,
                 staleDate: Int(occurrence.mustStartAt.timeIntervalSince1970),
+                attributesType: "OnTimeActivityAttributes",
                 attributes: OnTimeActivityAttributes(planId: planId),
                 alert: .init(title: routine.name,
                              body: Notifications.armBody(alertAt: occurrence.armAt,
@@ -117,10 +147,54 @@ enum PiSchedule {
         )
     }
 
-    /// Replaces the Pi's whole list with `events`.
+    /// Replaces the routine arm events. Run steps are untouched.
     static func publish(_ events: [Event]) {
-        lastEvents = events
+        armEvents = events
         send()
+    }
+
+    /// Replaces one run's projected step changes. Called on every engine
+    /// sync, about twenty times a step, nearly always with the same list;
+    /// `send` compares the encoded body before touching the network.
+    static func publishRun(planId: String, steps: [RunStep]) {
+        guard runSteps[planId] != steps else { return }
+        runSteps[planId] = steps
+        send()
+    }
+
+    static func clearRun(planId: String) {
+        guard runSteps.removeValue(forKey: planId) != nil else { return }
+        activityTokens.removeValue(forKey: planId)
+        send()
+    }
+
+    static func setActivityToken(planId: String, hex: String) {
+        guard activityTokens[planId] != hex else { return }
+        activityTokens[planId] = hex
+        send()
+    }
+
+    private static func runEvents() -> [Event] {
+        runSteps.flatMap { planId, steps -> [Event] in
+            guard let token = activityTokens[planId] else { return [] }
+            return steps.map { step in
+                let at = step.fireAt.timeIntervalSince1970
+                var aps = Aps(event: step.endsRun ? "end" : "update", contentState: step.state)
+                if step.endsRun {
+                    aps.dismissalDate = Int(at) + 120
+                } else {
+                    aps.staleDate = Int(step.state.targetLeaveBy.timeIntervalSince1970)
+                }
+                // The time is part of the id: when a tap moves every later
+                // boundary, these become new events rather than ones the Pi
+                // believes it already sent.
+                return Event(id: "\(planId)#\(step.state.blockIndex)\(step.endsRun ? "end" : "")@\(Int(at))",
+                             fireAt: at - pushLead,
+                             expiresAt: at + 30 * 60,
+                             token: token,
+                             aps: aps)
+            }
+        }
     }
 
     /// The push to start token changed, which invalidates the copy the Pi
@@ -139,7 +213,7 @@ enum PiSchedule {
         let status: [String: String] = [
             "at": ISO8601DateFormatter().string(from: Date()),
             "outcome": outcome,
-            "events": String(lastEvents.count)
+            "events": String(armEvents.count + runEvents().count)
         ]
         guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
               let data = try? JSONSerialization.data(withJSONObject: status, options: [.prettyPrinted]) else { return }
@@ -153,11 +227,20 @@ enum PiSchedule {
         }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        guard let body = try? encoder.encode(Upload(pushToStartToken: token, events: lastEvents)) else {
+        let events = (armEvents + runEvents()).sorted { ($0.fireAt, $0.id) < ($1.fireAt, $1.id) }
+        guard let body = try? encoder.encode(Upload(pushToStartToken: token, events: events)) else {
             note("skipped: could not encode the schedule")
             return
         }
         guard body != lastAccepted else { return }
+        // One upload at a time. An upload replaces the Pi's whole list, so
+        // two in flight could land out of order and leave the older list in
+        // place. A change during a send is sent when that send returns.
+        guard !isSending else {
+            needsResend = true
+            return
+        }
+        isSending = true
 
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
@@ -176,6 +259,11 @@ enum PiSchedule {
                 }
             } catch {
                 note("failed: \(error.localizedDescription)")
+            }
+            isSending = false
+            if needsResend {
+                needsResend = false
+                send()
             }
         }
     }
