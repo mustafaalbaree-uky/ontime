@@ -22,3 +22,5 @@ ModuleCache/
 .env
 .env.*
 *.log
+# Apple's Radar tone, copied from this Mac at build time by tools/alarm-sound.sh
+OnTime/Resources/Sounds/

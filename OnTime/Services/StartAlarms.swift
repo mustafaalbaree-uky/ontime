@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import ActivityKit
 #if canImport(AlarmKit)
 import AlarmKit
 #endif
@@ -52,6 +53,26 @@ enum StartAlarms {
         return AlarmManager.shared.authorizationState == .denied
     }
 
+    // MARK: - Sound
+
+    /// Radar, the Clock app's alarm tone, which is what he asked for by name.
+    /// iOS gives an app no way to ask for Clock's tones; it can only play a
+    /// file in its own bundle. `tools/alarm-sound.sh` copies the tone from
+    /// this Mac's system library into the app at build time. It is Apple's
+    /// file, so it is gitignored and never in the repo, and a build made
+    /// without it rings the iOS default alarm instead.
+    private static let soundFile = "Radar.caf"
+
+    private static var hasSoundFile: Bool {
+        Bundle.main.url(forResource: "Radar", withExtension: "caf") != nil
+    }
+
+    /// Which sound alarms are set with right now. An alarm keeps the sound it
+    /// was scheduled with, so when this changes every alarm already handed to
+    /// the system has to be set again.
+    private static var soundTag: String { hasSoundFile ? soundFile : "default" }
+    private static let soundTagKey = "startAlarmSoundTag"
+
     // MARK: - Routine alarms
 
     private static let routineIdsKey = "startAlarmRoutineAlarmIds"
@@ -69,6 +90,8 @@ enum StartAlarms {
         let previous = Set(UserDefaults.standard.stringArray(forKey: routineIdsKey) ?? [])
         let future = wanted.filter { $0.fireAt > Date().addingTimeInterval(5) }
         UserDefaults.standard.set(future.map(\.id.uuidString), forKey: routineIdsKey)
+        let soundChanged = UserDefaults.standard.string(forKey: soundTagKey) != soundTag
+        UserDefaults.standard.set(soundTag, forKey: soundTagKey)
 
         Task {
             let existing = (try? AlarmManager.shared.alarms) ?? []
@@ -81,7 +104,7 @@ enum StartAlarms {
                 if let current = existing.first(where: { $0.id == alarm.id }) {
                     // Already set for this exact moment: leave it. Cancelling
                     // and setting again would be a window with no alarm.
-                    if current.schedule == .fixed(alarm.fireAt) { continue }
+                    if current.schedule == .fixed(alarm.fireAt), !soundChanged { continue }
                     try? AlarmManager.shared.cancel(id: alarm.id)
                 }
                 await schedule(alarm)
@@ -136,7 +159,8 @@ enum StartAlarms {
         do {
             _ = try await AlarmManager.shared.schedule(
                 id: alarm.id,
-                configuration: .alarm(schedule: .fixed(alarm.fireAt), attributes: attributes)
+                configuration: .alarm(schedule: .fixed(alarm.fireAt), attributes: attributes,
+                                      sound: hasSoundFile ? .named(soundFile) : .default)
             )
             return true
         } catch {

@@ -413,6 +413,17 @@ routine whose "Alarm at start" switch is on, at `mustStartAt`.
   is left alone rather than cancelled and set again.
 - `AlarmPresentation.Alert` lost its stop button parameter in iOS 26.1; both
   initializers are used behind an availability check.
+- **The alarm sound is Radar, from a file that is never in the repo.** He
+  asked for Clock's Radar tone by name. iOS gives an app no way to request
+  Clock's tones, only to play a file from its own bundle, so
+  `tools/alarm-sound.sh` (run by `tools/install.sh` before XcodeGen, which
+  only picks up files that exist) copies `Radar.m4r` out of this Mac's
+  `ToneLibrary.framework`, repeats the 3.8 second loop to just under
+  AlarmKit's 30 second limit and writes an IMA4 `.caf` into the gitignored
+  `OnTime/Resources/Sounds/`. It is Apple's file: do not commit it. A build
+  without it rings the iOS default. An alarm keeps the sound it was scheduled
+  with, so `StartAlarms` tags the sound in use and sets every alarm again when
+  the tag changes.
 - The older route, the timer icon on the builder's "Start step 1 by", runs the
   "OnTime Timer" shortcut (`TimerShortcut`) and shows nothing in the app.
 

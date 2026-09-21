@@ -10,6 +10,10 @@ STATE="$HOME/.ontime"
 
 cd "$DIR"
 
+# Before the project is generated: XcodeGen only picks up files that exist.
+echo "==> Alarm sound"
+./tools/alarm-sound.sh
+
 echo "==> Generating project"
 xcodegen generate >/dev/null
 
