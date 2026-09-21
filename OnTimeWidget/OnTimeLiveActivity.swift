@@ -22,6 +22,12 @@ private typealias RunPhase = OnTimeActivityPhase
 // without the app, the ring, stays a `ProgressView(timerInterval:)` and is
 // tinted white; colour on it is reserved for late and finished, which are
 // states rather than decoration.
+//
+// The type is look A, the same as the app: SF Pro at regular weight, the
+// countdown thin, sentence case, no tracking, pips all one height, and a
+// white Next Step button with no outline. This plate and the Island were the
+// two screens the owner disliked most in the old look, which was SF Rounded
+// bold, tracked capitals and an outlined button.
 
 private extension OnTimeActivityAttributes.ContentState {
     var ringInterval: ClosedRange<Date>? {
@@ -70,21 +76,18 @@ private struct CountdownNumber: View {
     let phase: RunPhase
     let size: CGFloat
 
-    private var font: Font { .system(size: size, weight: .bold, design: .rounded) }
-
     var body: some View {
         switch phase {
         case .finished:
             Text("Done")
-                .font(font)
+                .onTimeNumeral(size)
                 .foregroundStyle(OnTimeSpectrum.done)
         case .over:
             HStack(spacing: 0) {
                 Text("+")
-                    .font(.system(size: size * 0.7, weight: .bold, design: .rounded))
+                    .onTimeNumeral(size)
                 Text(timerInterval: state.lateInterval, countsDown: false)
-                    .font(font)
-                    .monospacedDigit()
+                    .onTimeNumeral(size)
                     .multilineTextAlignment(.trailing)
             }
             .foregroundStyle(OnTimeSpectrum.late)
@@ -98,8 +101,7 @@ private struct CountdownNumber: View {
                     Text("0:00")
                 }
             }
-            .font(font)
-            .monospacedDigit()
+            .onTimeNumeral(size)
             .multilineTextAlignment(.trailing)
             .minimumScaleFactor(0.5)
             .lineLimit(1)
@@ -108,10 +110,10 @@ private struct CountdownNumber: View {
     }
 }
 
-/// The run's progress as a row of pips, one per step: the current one lit and
-/// taller, the ones behind it dimmer, the ones ahead dimmest. The same three
-/// whites as the Home Screen widget and the run page, so the phone and the
-/// Lock Screen say the same thing in the same way.
+/// The run's progress as a row of pips, one per step, all 3 pt tall: the
+/// current one lit, the ones behind it dimmer, the ones ahead dimmest. The
+/// same three whites as the Home Screen widget and the run page, so the phone
+/// and the Lock Screen say the same thing in the same way.
 private struct StepPips: View {
     let state: OnTimeActivityAttributes.ContentState
     let phase: RunPhase
@@ -121,13 +123,12 @@ private struct StepPips: View {
             ForEach(0..<max(state.totalBlocks, 1), id: \.self) { i in
                 let passed = phase == .finished || i < state.blockIndex
                 let current = phase != .finished && i == state.blockIndex
-                Capsule()
+                RoundedRectangle(cornerRadius: 1.5)
                     .fill(current ? Color.white.opacity(0.95)
                           : (passed ? Color.white.opacity(0.30) : Color.white.opacity(0.12)))
-                    .frame(height: current ? 6 : 4)
+                    .frame(height: 3)
             }
         }
-        .frame(height: 6)
     }
 }
 
@@ -141,8 +142,8 @@ struct OnTimeLiveActivity: Widget {
             )
             .padding(.horizontal, 16)
             .padding(.vertical, 14)
-            // True black, not a translucent plate: the spectrum only looks
-            // lit when there is nothing behind it.
+            // True black, not a translucent plate: the same ground the app
+            // draws on, so the three whites read the same in both places.
             .activityBackgroundTint(Color.black)
             .activitySystemActionForegroundColor(Color.white)
         } dynamicIsland: { context in
@@ -152,19 +153,19 @@ struct OnTimeLiveActivity: Widget {
                 DynamicIslandExpandedRegion(.leading) {
                     HStack(spacing: 8) {
                         Image(systemName: phase == .finished ? "checkmark.circle.fill" : state.glyph)
-                            .font(.title3)
+                            .font(.system(size: 18))
                             .foregroundStyle(phase == .finished ? OnTimeSpectrum.done
                                              : (phase == .over ? OnTimeSpectrum.late : OnTimeSpectrum.primaryText))
                         VStack(alignment: .leading, spacing: 2) {
                             Text(state.isWaiting ? "Until start" : state.blockName)
-                                .font(.headline)
+                                .font(.system(size: 17))
                                 .lineLimit(1)
                             Text(state.isWaiting ? "Before step 1" : "Step \(state.blockIndex + 1) of \(state.totalBlocks)")
-                                .font(.caption2)
+                                .font(.system(size: 12))
                                 .foregroundStyle(OnTimeSpectrum.secondaryText)
                             (Text(state.normalizedTargetLabel) + Text(state.targetLeaveBy, style: .time))
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(OnTimeSpectrum.primaryText)
+                                .font(.system(size: 12))
+                                .foregroundStyle(OnTimeSpectrum.secondaryText)
                         }
                     }
                     .padding(.leading, 4)
@@ -172,9 +173,9 @@ struct OnTimeLiveActivity: Widget {
 
                 DynamicIslandExpandedRegion(.trailing) {
                     VStack(alignment: .trailing, spacing: 2) {
-                        CountdownNumber(state: state, phase: phase, size: 34)
+                        CountdownNumber(state: state, phase: phase, size: 36)
                         Text(caption(state: state, phase: phase))
-                            .font(.caption2.weight(phase == .over ? .semibold : .regular))
+                            .font(.system(size: 11.5))
                             .foregroundStyle(phase == .over ? OnTimeSpectrum.late : OnTimeSpectrum.secondaryText)
                             .lineLimit(1)
                     }
@@ -202,7 +203,8 @@ struct OnTimeLiveActivity: Widget {
                                          : (phase == .over ? OnTimeSpectrum.late : OnTimeSpectrum.primaryText))
                     if !state.isWaiting && phase != .finished {
                         Text("\(state.blockIndex + 1)/\(state.totalBlocks)")
-                            .font(.caption2.bold())
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(OnTimeSpectrum.secondaryText)
                     }
                 }
             } compactTrailing: {
@@ -235,22 +237,17 @@ private struct CompleteButton: View {
                 Spacer()
                 Label(state.blockIndex + 1 >= state.totalBlocks ? "Finish" : "Next Step",
                       systemImage: "checkmark.circle.fill")
-                    .font(.subheadline.weight(.semibold))
+                    .font(.system(size: 14, weight: .medium))
                 Spacer()
             }
             .padding(.vertical, 9)
-            .background(Color.white.opacity(0.10))
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay {
-                // A plain edge, not a gradient one. The step pips above are
-                // this plate's rainbow; a second one on the button underneath
-                // them just makes the plate louder without saying more.
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(phase == .over ? OnTimeSpectrum.late
-                                                 : Color.white.opacity(0.30),
-                                  lineWidth: 1.5)
-            }
-            .foregroundStyle(OnTimeSpectrum.primaryText)
+            // The app's primary button: white plate, black text, 10 pt corner,
+            // no outline. It stays white once the step is over. The outline it
+            // used to have turned red then; the red countdown above carries
+            // that state on its own.
+            .background(OnTimeSpectrum.primaryText)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .foregroundStyle(OnTimeSpectrum.ink)
         }
         .buttonStyle(.plain)
     }
@@ -318,15 +315,14 @@ private struct LockScreenLiveActivityView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text(state.planName.uppercased())
-                    .font(.caption2.weight(.bold))
-                    .tracking(1.2)
+                // The plan's name as typed, not uppercased.
+                Text(state.planName)
+                    .font(.system(size: 12))
                     .foregroundStyle(OnTimeSpectrum.secondaryText)
                     .lineLimit(1)
                 Spacer()
-                Text(state.isWaiting ? "UNTIL START" : "STEP \(state.blockIndex + 1) OF \(state.totalBlocks)")
-                    .font(.caption2.weight(.bold))
-                    .tracking(1.2)
+                Text(state.isWaiting ? "Until start" : "Step \(state.blockIndex + 1) of \(state.totalBlocks)")
+                    .font(.system(size: 12))
                     .foregroundStyle(OnTimeSpectrum.secondaryText)
             }
 
@@ -335,21 +331,21 @@ private struct LockScreenLiveActivityView: View {
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(state.isWaiting ? "Until start" : state.blockName)
-                        .font(.title3.weight(.semibold))
+                        .font(.system(size: 18))
                         .foregroundStyle(OnTimeSpectrum.primaryText)
                         .lineLimit(1)
                     (Text(state.normalizedTargetLabel) + Text(state.targetLeaveBy, style: .time))
-                        .font(.caption.weight(.medium))
+                        .font(.system(size: 12.5))
                         .foregroundStyle(OnTimeSpectrum.secondaryText)
                 }
 
                 Spacer(minLength: 4)
 
                 VStack(alignment: .trailing, spacing: 1) {
-                    CountdownNumber(state: state, phase: phase, size: 40)
+                    CountdownNumber(state: state, phase: phase, size: 44)
                     Text(phase == .over ? state.overCaption
                          : (phase == .finished ? "finished" : (state.isWaiting ? "until start" : "until due")))
-                        .font(.caption2.weight(phase == .over ? .semibold : .regular))
+                        .font(.system(size: 11.5))
                         .foregroundStyle(phase == .over ? OnTimeSpectrum.late : OnTimeSpectrum.secondaryText)
                         .lineLimit(1)
                 }
@@ -368,7 +364,7 @@ private struct LockScreenLiveActivityView: View {
     private var ring: some View {
         ZStack {
             Circle()
-                .stroke(Color.white.opacity(0.10), lineWidth: 4)
+                .stroke(Color.white.opacity(0.12), lineWidth: 3)
             if phase == .running, let interval = state.ringInterval {
                 ProgressView(timerInterval: interval, countsDown: true) {
                     EmptyView()
@@ -379,12 +375,12 @@ private struct LockScreenLiveActivityView: View {
                 .tint(OnTimeSpectrum.primaryText)
             } else {
                 Circle()
-                    .stroke(accent, lineWidth: 4)
+                    .stroke(accent, lineWidth: 3)
             }
             Image(systemName: phase == .finished ? "checkmark" : state.glyph)
-                .font(.system(size: 17, weight: .semibold))
+                .font(.system(size: 16))
                 .foregroundStyle(accent)
         }
-        .frame(width: 48, height: 48)
+        .frame(width: 44, height: 44)
     }
 }

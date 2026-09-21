@@ -9,11 +9,15 @@ import WidgetKit
 /// this stay correct for days without the app being opened: nothing here is
 /// relative to when the snapshot was written.
 ///
-/// **Deliberately monochrome.** The rest of the house style is a moving
-/// spectrum, but a widget cannot move, and this one is a list you read at
-/// arm's length while doing something else. White on black, with colour
-/// reserved for the two things that mean something: red once a step is past
-/// its time, and the dimmed row of an occurrence that has not woken up yet.
+/// **Deliberately monochrome.** A widget cannot move, and this one is a list
+/// you read at arm's length while doing something else. White on black, with
+/// colour reserved for the one thing that means something here, red once a
+/// step is past its time; an occurrence that has not woken up yet is a dimmed
+/// row.
+///
+/// Type is look A, the same as the app and the Live Activity: SF Pro at
+/// regular weight, thin or light numerals through `onTimeNumeral`, sentence
+/// case, no tracking. It used to be SF Rounded bold with tracked capitals.
 struct UpNextWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: OnTimeWidgetStore.kind, provider: UpNextProvider()) { entry in
@@ -118,32 +122,30 @@ struct UpNextView: View {
                 RunLine(run: run, now: entry.date, compact: true)
                 Spacer(minLength: 0)
                 Text(run.stepName.isEmpty ? run.name : run.stepName)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.white.opacity(0.62))
+                    .font(.system(size: 13))
+                    .foregroundStyle(OnTimeSpectrum.secondaryText)
                     .lineLimit(2)
                 StepPips(index: run.stepIndex, total: run.totalSteps)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         } else if let next = upcoming.first {
             VStack(alignment: .leading, spacing: 6) {
-                Text("NEXT")
-                    .font(.system(size: 10, weight: .bold))
-                    .tracking(1.4)
-                    .foregroundStyle(.white.opacity(0.38))
+                Text("Next")
+                    .font(.system(size: 12))
+                    .foregroundStyle(OnTimeSpectrum.tertiaryText)
                 Text(next.name)
-                    .font(.headline)
+                    .font(.system(size: 16))
                     .foregroundStyle(.white)
                     .lineLimit(2)
                 Spacer(minLength: 0)
                 Text(WidgetFormat.clock(next.deadline))
-                    .font(.system(size: 28, weight: .bold, design: .rounded))
-                    .monospacedDigit()
+                    .onTimeNumeral(28)
                     .foregroundStyle(.white)
                     .minimumScaleFactor(0.6)
                     .lineLimit(1)
                 Text(WidgetFormat.startLine(next, now: entry.date))
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.5))
+                    .font(.system(size: 12))
+                    .foregroundStyle(OnTimeSpectrum.secondaryText)
                     .lineLimit(1)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
@@ -164,7 +166,7 @@ struct UpNextView: View {
                     StepPips(index: run.stepIndex, total: run.totalSteps)
                 }
                 if !upcoming.isEmpty {
-                    Divider().overlay(Color.white.opacity(0.12))
+                    Divider().overlay(OnTimeSpectrum.hairline)
                 }
             }
 
@@ -190,10 +192,12 @@ struct UpNextView: View {
         if let run {
             VStack(alignment: .leading, spacing: 1) {
                 Text(run.stepName.isEmpty ? run.name : run.stepName)
-                    .font(.caption.weight(.semibold))
+                    .font(.caption)
                     .lineLimit(1)
-                CountdownText(target: run.target, now: entry.date,
-                              font: .system(size: 22, weight: .bold, design: .rounded))
+                // Regular, not light: the Lock Screen draws an accessory in
+                // its own vibrant material, where a light stroke washes out.
+                CountdownText(target: run.target, now: entry.date, size: 22,
+                              weight: .regular)
                 Text("\(run.targetLabel) \(WidgetFormat.clock(run.target ?? run.deadline))")
                     .font(.caption2)
                     .lineLimit(1)
@@ -201,9 +205,9 @@ struct UpNextView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         } else if let next = upcoming.first {
             VStack(alignment: .leading, spacing: 1) {
-                Text(next.name).font(.caption.weight(.semibold)).lineLimit(1)
+                Text(next.name).font(.caption).lineLimit(1)
                 Text(WidgetFormat.clock(next.deadline))
-                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                    .font(.system(size: 22, weight: .regular))
                     .monospacedDigit()
                 Text(WidgetFormat.startLine(next, now: entry.date))
                     .font(.caption2)
@@ -236,35 +240,33 @@ private struct RunLine: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Image(systemName: run.symbol)
-                    .font(.system(size: 11, weight: .semibold))
-                Text(run.targetLabel.uppercased())
-                    .font(.system(size: 10, weight: .bold))
-                    .tracking(1.2)
+                    .font(.system(size: 11))
+                // As the app hands it over ("Finish by"), not uppercased.
+                Text(run.targetLabel)
+                    .font(.system(size: 12))
                     .lineLimit(1)
                 if !compact, let target = run.target {
                     Text(WidgetFormat.clock(target))
-                        .font(.system(size: 10, weight: .bold))
+                        .font(.system(size: 12))
                         .monospacedDigit()
-                        .foregroundStyle(.white.opacity(0.45))
+                        .foregroundStyle(OnTimeSpectrum.tertiaryText)
                 }
                 Spacer(minLength: 0)
                 if !compact {
                     Text(run.name)
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.45))
+                        .font(.system(size: 12))
+                        .foregroundStyle(OnTimeSpectrum.tertiaryText)
                         .lineLimit(1)
                 }
             }
-            .foregroundStyle(late ? OnTimeSpectrum.late : .white.opacity(0.55))
+            .foregroundStyle(late ? OnTimeSpectrum.late : OnTimeSpectrum.secondaryText)
 
-            CountdownText(target: run.target, now: now,
-                          font: .system(size: compact ? 32 : countdownSize,
-                                        weight: .bold, design: .rounded))
+            CountdownText(target: run.target, now: now, size: compact ? 32 : countdownSize)
 
             if !compact {
                 Text(run.stepName.isEmpty ? run.name : run.stepName)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white.opacity(0.7))
+                    .font(.system(size: 15))
+                    .foregroundStyle(OnTimeSpectrum.secondaryText)
                     .lineLimit(1)
             }
         }
@@ -281,13 +283,22 @@ private struct RunLine: View {
 private struct CountdownText: View {
     let target: Date?
     let now: Date
-    let font: Font
+    let size: CGFloat
+    /// nil takes the weight `OnTimeSpectrum.numeral` picks for the size.
+    var weight: Font.Weight? = nil
+
+    private var font: Font {
+        weight.map { .system(size: size, weight: $0) } ?? OnTimeSpectrum.numeral(size)
+    }
+
+    private var tracking: CGFloat { OnTimeSpectrum.numeralTracking(size) }
 
     var body: some View {
         if let target, target > now {
             Text(timerInterval: now...target, countsDown: true)
                 .font(font)
                 .monospacedDigit()
+                .tracking(tracking)
                 .foregroundStyle(.white)
                 .lineLimit(1)
                 .minimumScaleFactor(0.5)
@@ -299,6 +310,7 @@ private struct CountdownText: View {
             }
             .font(font)
             .monospacedDigit()
+            .tracking(tracking)
             .foregroundStyle(OnTimeSpectrum.late)
             .lineLimit(1)
             .minimumScaleFactor(0.5)
@@ -310,8 +322,8 @@ private struct CountdownText: View {
     }
 }
 
-/// One row of bars for the sequence. White, not the per-step hues the Live
-/// Activity uses: at widget size a row of six colours is a smear, and the
+/// One row of bars for the sequence, in the same three whites and the same
+/// 3 pt height as the Live Activity's pips and the run page's strip. The
 /// only thing worth reading here is how far along the run is.
 private struct StepPips: View {
     let index: Int
@@ -321,13 +333,12 @@ private struct StepPips: View {
         if total > 1 {
             HStack(spacing: 3) {
                 ForEach(0..<total, id: \.self) { i in
-                    Capsule()
+                    RoundedRectangle(cornerRadius: 1.5)
                         .fill(i == index ? Color.white.opacity(0.95)
                               : (i < index ? Color.white.opacity(0.30) : Color.white.opacity(0.12)))
-                        .frame(height: i == index ? 5 : 3)
+                        .frame(height: 3)
                 }
             }
-            .frame(height: 5)
         }
     }
 }
@@ -344,25 +355,25 @@ private struct UpcomingRow: View {
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: item.symbol)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: 11))
                 .foregroundStyle(.white.opacity(armed ? 0.8 : 0.35))
                 .frame(width: 15)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(item.name)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 13))
                     .foregroundStyle(.white.opacity(armed ? 1 : 0.75))
                     .lineLimit(1)
                 Text(WidgetFormat.startLine(item, now: now))
-                    .font(.system(size: 10))
-                    .foregroundStyle(.white.opacity(0.42))
+                    .font(.system(size: 11))
+                    .foregroundStyle(OnTimeSpectrum.tertiaryText)
                     .lineLimit(1)
             }
 
             Spacer(minLength: 4)
 
             Text(WidgetFormat.clock(item.deadline))
-                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                .font(.system(size: 14))
                 .monospacedDigit()
                 .foregroundStyle(.white.opacity(armed ? 1 : 0.62))
         }
@@ -373,8 +384,8 @@ private struct EmptyState: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Nothing scheduled")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.white.opacity(0.7))
+                .font(.system(size: 15))
+                .foregroundStyle(OnTimeSpectrum.secondaryText)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
     }
