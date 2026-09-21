@@ -16,7 +16,14 @@ import Foundation
 /// existed: by local notification, and on the next foreground.
 @MainActor
 enum PiSchedule {
-    static let endpoint = URL(string: "http://100.88.112.8:8790/schedule")!
+    /// The Pi by its tailnet name, not its 100.x address. App Transport
+    /// Security refuses plain HTTP, its exceptions are keyed by domain and
+    /// cannot name an IP, and `NSAllowsLocalNetworking` does not cover
+    /// Tailscale's address range. Info.plist carries the one exception, for
+    /// this host only. Plain HTTP is acceptable here because the tailnet
+    /// already encrypts the hop, and a certificate on the Pi would be one
+    /// more thing to expire silently.
+    static let endpoint = URL(string: "http://warden.taile3f2ad.ts.net:8790/schedule")!
 
     struct Event: Encodable {
         /// The Live Activity's `planId`. The Pi fires an id once, so an
