@@ -510,22 +510,28 @@ struct SequenceComposer: View {
         VStack(spacing: 12) {
             Button(action: startRun) {
                 VStack(spacing: 4) {
-                    // Black on the white plate of a primary button, so the
-                    // caption is the ink at the same 62% the label white is.
+                    // On the raised surface, not the white plate every other
+                    // primary button wears. This one is two lines tall with a
+                    // 30 pt number in it and is pinned to the bottom of the
+                    // screen for as long as the page is open: as a white slab
+                    // it was the brightest thing in the app by a wide margin,
+                    // and the late red had white behind it, the weakest
+                    // contrast anywhere. Its size already says it is the
+                    // button.
                     Text(scratchBlocks.isEmpty ? "Set timer for" : "Start in")
                         .font(InkType.labelSmall)
-                        .foregroundStyle(OnTimeSpectrum.ink.opacity(0.62))
+                        .foregroundStyle(OnTimeSpectrum.secondaryText)
                     // Not another spectrum: Final Time above is this page's
                     // one rainbow. Two spectrum filled numbers on one screen
                     // is the point at which it stops meaning anything.
                     Text(TimeFormatting.spanWords(remaining))
                         .onTimeNumeral(InkType.numberSize)
-                        .foregroundStyle(remaining < 0 ? OnTimeSpectrum.late : OnTimeSpectrum.ink)
+                        .foregroundStyle(remaining < 0 ? OnTimeSpectrum.late : OnTimeSpectrum.primaryText)
                         .contentTransition(.numericText())
                         .animation(.default, value: remaining)
                 }
             }
-            .buttonStyle(SpectrumButtonStyle())
+            .buttonStyle(SpectrumButtonStyle(prominent: false))
 
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
