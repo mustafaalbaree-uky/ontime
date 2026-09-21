@@ -363,6 +363,32 @@ the only samples, and with auto advance on a tap can only land before the
 estimate runs out: every sample was short, learned durations could only fall,
 and start times crept later.
 
+**A routine can ring a real alarm at its start** (`StartAlarms`, AlarmKit,
+iOS 26 and up, guarded by `#available`). A notification is the wrong
+instrument when step 1 is "Wake up": it obeys silent mode and Focus and sounds
+once. An AlarmKit alarm is the Clock app's own: it rings until stopped, through
+both. Like the arm notifications and the Pi schedule, an alarm is an absolute
+clock time handed to the system in advance, so it rings with the app closed;
+`ScheduleService.refreshArmAlarms` sets the next three occurrences of every
+routine whose "Alarm at start" switch is on, at `mustStartAt`.
+
+- **The switch lives in `AppSettings.startAlarmRoutineIds`, not on
+  `ScheduledRoutine`**, because a new model field risks rebuilding the store.
+- **An alarm's id is the occurrence's derived plan uuid**
+  (`OccurrenceIdentity`), so the run that occurrence arms cancels its own
+  alarm with no bookkeeping: `RunEngine.beginFirstStepNow` when step 1 is
+  started early by a tap (not at the rollover, which is the alarm ringing as
+  intended) and `RunEngine.cancel`. An occurrence that already armed and has
+  no run still waiting gets no alarm.
+- `setRoutineAlarms` only ever cancels ids it set itself, so an alarm set by
+  hand from `LiveRunPage` ("Set alarm for 5:59 AM", shown while a run waits
+  to start) survives a refresh, and an alarm already set for the right moment
+  is left alone rather than cancelled and set again.
+- `AlarmPresentation.Alert` lost its stop button parameter in iOS 26.1; both
+  initializers are used behind an availability check.
+- The older route, the timer icon on the builder's "Start step 1 by", runs the
+  "OnTime Timer" shortcut (`TimerShortcut`) and shows nothing in the app.
+
 **There is no schema migration.** `OnTimeApp.openStore` rebuilds the store
 when it cannot be opened against `Schema0.models`. That is deliberate for a
 personal app whose data re-accumulates, but it means any model change wipes
