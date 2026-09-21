@@ -42,6 +42,23 @@ struct ScheduleServiceTests {
         return r
     }
 
+    // MARK: - The week the Pi is given
+
+    /// The Pi acts on days the app may never be opened, so it gets the week,
+    /// and the first entry has to be exactly what everything else calls the
+    /// next occurrence.
+    @Test func aDailyRoutineHasAnOccurrenceForEachOfTheComingDays() {
+        let r = routine(anchorHour: 20, anchorMinute: 0, stepMinutes: [10, 20])
+        let now = date(2026, 8, 20, 12, 0)
+
+        let week = ScheduleService.upcomingOccurrences(for: r, now: now, calendar: calendar)
+
+        #expect(week.count == 8)
+        #expect(week.first == ScheduleService.nextOccurrence(for: r, now: now, calendar: calendar))
+        #expect(week.map(\.deadline) == week.map(\.deadline).sorted())
+        #expect(week[1].deadline == date(2026, 8, 21, 20, 0))
+    }
+
     // MARK: - Deriving the occurrence
 
     @Test func mustStartIsDeadlineMinusTotalDuration() {

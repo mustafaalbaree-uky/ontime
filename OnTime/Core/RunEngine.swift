@@ -582,8 +582,8 @@ final class RunEngine {
         guard !isFinished, let p = plan, !blocks.isEmpty else { return [] }
 
         var steps: [PiSchedule.RunStep] = []
-        var index = run.currentIndex
-        var cursor: Date
+        let index = run.currentIndex
+        let cursor: Date
         let solution: Solution?
 
         if isWaitingToStart {
@@ -599,22 +599,24 @@ final class RunEngine {
             cursor = start
         }
 
-        while blocks.indices.contains(index), autoAdvanceEligible(blocks[index]) {
-            let minutes = TravelTimeService.shared.manualEstimateMinutes(for: blocks[index], now: now)
-            let boundary = cursor.addingTimeInterval(TimeInterval(minutes * 60))
-            index += 1
-            cursor = boundary
-            // A boundary already behind us is `reconcile`'s to collapse on
-            // the next tick; it is not a future change.
-            guard boundary > now else { continue }
-            if blocks.indices.contains(index) {
-                steps.append(.init(fireAt: boundary,
-                                   state: projectedState(index: index, segmentStart: boundary, solution: solution, plan: p),
+        let timeline = blocks.map { block in
+            RunProjection.Step(
+                seconds: TimeInterval(TravelTimeService.shared.manualEstimateMinutes(for: block, now: now) * 60),
+                autoAdvances: autoAdvanceEligible(block)
+            )
+        }
+        for boundary in RunProjection.boundaries(steps: timeline, currentIndex: index,
+                                                 currentStart: cursor, now: now) {
+            if blocks.indices.contains(boundary.entering) {
+                steps.append(.init(fireAt: boundary.at,
+                                   state: projectedState(index: boundary.entering, segmentStart: boundary.at,
+                                                         solution: solution, plan: p),
                                    endsRun: false))
             } else {
-                var finished = projectedState(index: blocks.count - 1, segmentStart: boundary, solution: solution, plan: p)
+                var finished = projectedState(index: blocks.count - 1, segmentStart: boundary.at,
+                                              solution: solution, plan: p)
                 finished.isFinished = true
-                steps.append(.init(fireAt: boundary, state: finished, endsRun: true))
+                steps.append(.init(fireAt: boundary.at, state: finished, endsRun: true))
             }
         }
         return steps

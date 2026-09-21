@@ -2,8 +2,9 @@ import ActivityKit
 import Foundation
 import SwiftData
 
-/// The token that lets a server start this app's Live Activity while the app
-/// is not running.
+/// The push tokens the Pi needs: the one that lets it start this app's Live
+/// Activity while the app is not running, and each running activity's own
+/// token, which lets it move that activity to the next step.
 ///
 /// Nothing on the phone can put a countdown in the Dynamic Island at an exact
 /// clock time: `Activity.request` only works in the foreground, and iOS will
@@ -11,9 +12,11 @@ import SwiftData
 /// event addressed to this token and the system raises the activity with the
 /// app closed. The sender is the Pi (`tools/pi/ontime_push.py`).
 ///
-/// First slice only: the token is written to a file in Documents, where
-/// `devicectl device copy from` can read it. Uploading it to the Pi replaces
-/// the file once a push has been seen to work.
+/// `PiSchedule` uploads the tokens with the schedule. The push to start
+/// token is also written to a file in Documents, where
+/// `devicectl device copy from` can read it, because a push sent by hand
+/// with `tools/pi/ontime_push.py` is the quickest way to tell a Pi problem
+/// from a phone problem.
 @MainActor
 enum PushTokens {
     static let fileName = "push-tokens.json"

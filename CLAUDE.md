@@ -238,12 +238,64 @@ Things about it that were each found the hard way:
   `devicectl device copy from` can read (`pi-schedule-status.json`,
   `push-tokens.json`).
 
-With Tailscale off on the phone, or the Pi down, the upload fails and that
-routine arms the old way: local notification, then foreground. Still open:
-only each routine's *next* occurrence is uploaded, so a day with no app launch
-leaves the Pi without the following day; and step changes mid run are not
-pushed yet, so the Island still goes red and counts up at a step boundary
-while the app is suspended.
+**The Pi also moves a running activity to its next step, and ends it.** The
+app is suspended within seconds of leaving the foreground, so a step that ran
+out used to sit in the Island red and counting up until the app was opened,
+with the run in fact two steps further on. `RunEngine.projectedActivitySteps`
+is `reconcile()` run forward in imagination (the pure walk is
+`RunProjection.boundaries`, which is where the tests are): every auto
+advancing step ends on its estimate, and projection stops at the first step
+that waits for a tap, because past it "over, waiting on you" is the truth and
+the staleness re-render already shows it. While waiting, the first entry is
+the rollover into step 1. Each entry carries the full `ContentState` for the
+step being entered, with its target read from the solution exactly as
+`leaveByDate` reads it, so a pushed step and the step the app would have shown
+cannot disagree. `PiSchedule.publishRun` is called on every engine sync and
+dedupes on the encoded body.
+
+- **An update goes to the activity's own token, not the push to start
+  token.** `LiveActivityManager.start` requests with `pushType: .token`, and
+  `PushTokens.observeActivities` follows every activity, pushed or local, and
+  reports its token. A run's steps are only uploaded once its activity has one.
+- **A push that wakes the app arms the routine on the spot.**
+  `PushTokens.track` runs `ScheduleService.catchUp` when a new activity
+  appears, because a background launch may never build the view hierarchy
+  that runs the foreground catch up. That mints the run, whose first sync
+  uploads the step changes for the rest of the routine. Without it a routine
+  the Pi started would get its start and nothing after.
+- **Step event ids contain their time.** A tap moves every later boundary;
+  the moved boundaries have to be new events, not ones the Pi believes it
+  already sent.
+- **The Pi sends two seconds early** (`PiSchedule.pushLead`). The activity
+  goes stale at the boundary and re-renders as over, so a push landing just
+  after it shows a flash of red first.
+- **One upload at a time.** An upload replaces the Pi's whole list, so two in
+  flight could land out of order and leave the older list in place.
+- A walk entered by push has no `WalkTracker` behind it until the app runs, so
+  it is labelled "Home by" rather than counting to a turnaround.
+
+The Pi is given a week of occurrences per routine
+(`ScheduleService.upcomingOccurrences`), for the reason the widget snapshot
+holds a week: it acts on days the app may never be opened.
+
+With Tailscale off on the phone, or the Pi down, the upload fails, the Pi
+keeps its last list, and anything it does not know about behaves the old way:
+local notification, then foreground.
+
+**An edit to a routine that already armed reaches today**
+(`ScheduleService.applyEdit`, run from `syncAllLiveRuns`). With no run open,
+an edit clears `lastArmedDay` so the occurrence arms again if its window is
+open: moving an iqama fifteen minutes after stopping the run used to change
+the routine and start nothing, and the Start Now swipe was the only way back.
+With a run open but still waiting to start, the run's steps are replaced with
+fresh copies. A run that has begun step 1 is left alone. An edit is told from
+the editor merely being opened by an in memory signature per routine.
+
+**An auto advanced step logs a sample equal to its estimate**
+(`RunEngine.logOnTimeCompletion`). It used to log nothing, which left taps as
+the only samples, and with auto advance on a tap can only land before the
+estimate runs out: every sample was short, learned durations could only fall,
+and start times crept later.
 
 **There is no schema migration.** `OnTimeApp.openStore` rebuilds the store
 when it cannot be opened against `Schema0.models`. That is deliberate for a

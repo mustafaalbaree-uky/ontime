@@ -220,7 +220,14 @@ enum PiSchedule {
         try? data.write(to: documents.appendingPathComponent(statusFileName), options: .atomic)
     }
 
+    /// True inside the test host. Tests build routines named "Test" and
+    /// refresh the arm alarms with them; on a phone, which has a real push
+    /// token, that upload would replace the real schedule on the Pi and the
+    /// Pi would push "Test" into the Dynamic Island at its arm time.
+    private static let isRunningTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+
     private static func send() {
+        guard !isRunningTests else { return }
         guard let token = PushTokens.pushToStartHex else {
             note("skipped: no push to start token yet")
             return
