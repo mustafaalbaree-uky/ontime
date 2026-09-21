@@ -35,18 +35,26 @@ final class RunEngineStore {
             queue: .main
         ) { [weak self] note in
             guard let planId = note.userInfo?["planId"] as? String else { return }
+            let step = note.userInfo?["step"] as? Int
             Task { @MainActor in
-                self?.advanceRun(planId: planId)
+                self?.advanceRun(planId: planId, shownStep: step)
             }
         }
     }
 
-    private func advanceRun(planId: String) {
+    /// `shownStep` is the step the Live Activity's plate was showing when it
+    /// was tapped. A notification's "Next Step" action names none and
+    /// completes whichever step the run is on.
+    private func advanceRun(planId: String, shownStep: Int?) {
         // The tap is being handled live; the persisted copy the intent
         // wrote for the dead-app case is now redundant.
         UserDefaults.standard.removeObject(forKey: OnTimeShared.pendingAdvanceKey)
         guard let engine = engines.values.first(where: { $0.plan?.uuid.uuidString == planId }) else { return }
-        engine.advanceStep()
+        if let shownStep {
+            engine.completeShownStep(shownStep)
+        } else {
+            engine.advanceStep()
+        }
     }
 
     /// Consumes a "Complete Step" tap that arrived while no observer was
@@ -61,8 +69,7 @@ final class RunEngineStore {
               let at = record["at"] as? TimeInterval else { return }
         defaults.removeObject(forKey: OnTimeShared.pendingAdvanceKey)
         guard Date().timeIntervalSince1970 - at <= OnTimeShared.pendingAdvanceMaxAge else { return }
-        guard let engine = engines.values.first(where: { $0.plan?.uuid.uuidString == planId }) else { return }
-        engine.advanceStep()
+        advanceRun(planId: planId, shownStep: record["step"] as? Int)
     }
 
     /// Must be called once, at launch, before any `register`/`engine(for:)`

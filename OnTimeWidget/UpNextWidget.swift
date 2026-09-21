@@ -10,10 +10,10 @@ import WidgetKit
 /// relative to when the snapshot was written.
 ///
 /// **Deliberately monochrome.** A widget cannot move, and this one is a list
-/// you read at arm's length while doing something else. White on black, with
-/// colour reserved for the one thing that means something here, red once a
-/// step is past its time; an occurrence that has not woken up yet is a dimmed
-/// row.
+/// you read at arm's length while doing something else. White on black, no
+/// colour at all; an occurrence that has not woken up yet is a dimmed row. A
+/// step whose time has passed is never drawn: the run is on its next step by
+/// then (`LiveRun.shown(at:)`), and off the widget after its last.
 ///
 /// Type is look A, the same as the app and the Live Activity: SF Pro at
 /// regular weight, thin or light numerals through `onTimeNumeral`, sentence
@@ -231,11 +231,6 @@ private struct RunLine: View {
     let compact: Bool
     var countdownSize: CGFloat = 40
 
-    private var late: Bool {
-        guard let target = run.target else { return false }
-        return now >= target
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
@@ -259,7 +254,7 @@ private struct RunLine: View {
                         .lineLimit(1)
                 }
             }
-            .foregroundStyle(late ? OnTimeSpectrum.late : OnTimeSpectrum.secondaryText)
+            .foregroundStyle(OnTimeSpectrum.secondaryText)
 
             CountdownText(target: run.target, now: now, size: compact ? 32 : countdownSize)
 
@@ -278,8 +273,8 @@ private struct RunLine: View {
 /// Never `Text(_:style: .timer)`: that view counts down to its date and then,
 /// with no sign and no relabelling, starts counting up, so a number rising
 /// through 00:41 looks identical to one falling through it. The range form
-/// clamps at both ends by itself, and being over is a separate rendering in
-/// red behind an explicit `+`. Same two forms the Live Activity uses.
+/// clamps at both ends by itself. There is no form for a target that has
+/// passed, because `LiveRun.shown(at:)` never hands one over.
 private struct CountdownText: View {
     let target: Date?
     let now: Date
@@ -302,18 +297,6 @@ private struct CountdownText: View {
                 .foregroundStyle(.white)
                 .lineLimit(1)
                 .minimumScaleFactor(0.5)
-        } else if let target {
-            HStack(spacing: 1) {
-                Text("+")
-                Text(timerInterval: OnTimeActivityLogic.lateInterval(target: target),
-                     countsDown: false)
-            }
-            .font(font)
-            .monospacedDigit()
-            .tracking(tracking)
-            .foregroundStyle(OnTimeSpectrum.late)
-            .lineLimit(1)
-            .minimumScaleFactor(0.5)
         } else {
             Text("…")
                 .font(font)

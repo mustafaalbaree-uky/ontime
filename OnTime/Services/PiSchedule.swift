@@ -44,7 +44,7 @@ enum PiSchedule {
     struct RunStep: Equatable {
         let fireAt: Date
         let state: OnTimeActivityAttributes.ContentState
-        /// The last step ran out: end the activity showing this state.
+        /// The last step's time ran out: end the activity.
         let endsRun: Bool
     }
 
@@ -61,8 +61,8 @@ enum PiSchedule {
         /// Unix seconds, unlike the dates inside `contentState`: this field
         /// belongs to APNs, not to the app's Codable type.
         var staleDate: Int? = nil
-        /// Unix seconds. On an end, when the finished plate leaves the
-        /// Lock Screen.
+        /// Unix seconds. On an end, when the plate leaves the Lock Screen.
+        /// A time already past takes it off at once.
         var dismissalDate: Int? = nil
         var attributesType: String? = nil
         var attributes: OnTimeActivityAttributes? = nil
@@ -105,9 +105,9 @@ enum PiSchedule {
     private static var needsResend = false
 
     /// How long before a boundary the Pi sends. The activity goes stale at
-    /// the boundary itself and re-renders as over, so a push that arrives a
-    /// moment after it shows a flash of red first. One that arrives a moment
-    /// before shows the next step's countdown about to begin.
+    /// the boundary itself and moves on from what it holds, which is one
+    /// push older than what the Pi is about to deliver, and an end that
+    /// lands after the boundary shows a flash of "Done" first.
     private static let pushLead: TimeInterval = 2
 
     /// The start push for one routine occurrence: the "until start" plate
@@ -115,21 +115,41 @@ enum PiSchedule {
     static func armEvent(for routine: ScheduledRoutine,
                          occurrence: ScheduleService.Occurrence,
                          calendar: Calendar = .current) -> Event? {
-        guard let first = routine.orderedBlocks.first else { return nil }
+        let blocks = routine.orderedBlocks
+        guard let first = blocks.first else { return nil }
         let planId = OccurrenceIdentity.planUUID(routine: routine.uuid,
                                                  deadline: occurrence.deadline,
                                                  calendar: calendar).uuidString
+
+        // The routine's steps, so a plate nobody updates still moves from
+        // the wait into step 1 and on. Each is aimed at the deadline minus
+        // everything after it with an open duration step at zero, which is
+        // the schedule `mustStartAt` itself was solved from.
+        var later: [OnTimeShownStep] = []
+        var target = occurrence.deadline
+        for (index, block) in blocks.enumerated().reversed() {
+            later.insert(.init(name: block.name,
+                               symbol: block.template?.symbol ?? block.kind.defaultSymbol,
+                               index: index,
+                               target: target,
+                               targetLabel: RunEngine.shownLabel(for: block, isLast: index == blocks.count - 1),
+                               until: target), at: 0)
+            if !block.kind.isOpenDuration {
+                target -= TimeInterval(TravelTimeService.shared.manualEstimateMinutes(for: block) * 60)
+            }
+        }
+
         let state = OnTimeActivityAttributes.ContentState(
             planName: routine.name,
             blockName: first.name,
             blockIndex: 0,
-            totalBlocks: routine.orderedBlocks.count,
+            totalBlocks: blocks.count,
             targetLeaveBy: occurrence.mustStartAt,
             segmentStart: occurrence.armAt,
             symbol: first.template?.symbol ?? first.kind.defaultSymbol,
             isWaiting: true,
             targetLabel: "Start by ",
-            startsRunAtTarget: true
+            later: later
         )
         return Event(
             id: planId,
@@ -181,9 +201,9 @@ enum PiSchedule {
                 let at = step.fireAt.timeIntervalSince1970
                 var aps = Aps(event: step.endsRun ? "end" : "update", contentState: step.state)
                 if step.endsRun {
-                    aps.dismissalDate = Int(at) + 120
+                    aps.dismissalDate = Int(at - pushLead)
                 } else {
-                    aps.staleDate = Int(step.state.targetLeaveBy.timeIntervalSince1970)
+                    aps.staleDate = Int(step.state.until.timeIntervalSince1970)
                 }
                 // The time is part of the id: when a tap moves every later
                 // boundary, these become new events rather than ones the Pi

@@ -53,58 +53,55 @@ struct PiPushTests {
         #expect(monday != other)
     }
 
-    // MARK: - Step boundaries
+    // MARK: - When the surfaces leave each step
 
-    private func step(_ minutes: Double, auto: Bool = true) -> RunProjection.Step {
-        .init(seconds: minutes * 60, autoAdvances: auto)
+    private func step(_ minutes: Double, target: Date, auto: Bool = true) -> RunProjection.Step {
+        .init(seconds: minutes * 60, autoAdvances: auto, target: target)
     }
 
-    @Test func everyAutoAdvancingStepEndsOnItsEstimateAndTheLastEndsTheRun() {
+    /// On schedule, every step ends on its estimate, which is its target.
+    @Test func aRunOnScheduleLeavesEachStepAtItsTarget() {
         let start = date(2026, 9, 21, 7, 0)
-        let found = RunProjection.boundaries(steps: [step(10), step(20), step(5)],
-                                             currentIndex: 0, currentStart: start, now: start)
-        #expect(found == [
-            .init(entering: 1, at: date(2026, 9, 21, 7, 10)),
-            .init(entering: 2, at: date(2026, 9, 21, 7, 30)),
-            .init(entering: 3, at: date(2026, 9, 21, 7, 35))
-        ])
+        let found = RunProjection.untils(steps: [step(10, target: date(2026, 9, 21, 7, 10)),
+                                                 step(20, target: date(2026, 9, 21, 7, 30)),
+                                                 step(5, target: date(2026, 9, 21, 7, 35))],
+                                         from: start)
+        #expect(found == [date(2026, 9, 21, 7, 10), date(2026, 9, 21, 7, 30), date(2026, 9, 21, 7, 35)])
     }
 
-    /// Past a step that waits for a tap, nothing can be known: the next
-    /// change happens when he taps. Entering that step is still projected.
-    @Test func projectionStopsAtTheFirstStepThatWaitsForATap() {
-        let start = date(2026, 9, 21, 7, 0)
-        let found = RunProjection.boundaries(steps: [step(10), step(20, auto: false), step(5)],
-                                             currentIndex: 0, currentStart: start, now: start)
-        #expect(found == [.init(entering: 1, at: date(2026, 9, 21, 7, 10))])
+    /// Started five minutes early: the engine moves on when each estimate
+    /// runs out, five minutes before each target, and the surfaces go with
+    /// it.
+    @Test func aRunAheadOfScheduleLeavesEachStepOnItsEstimate() {
+        let start = date(2026, 9, 21, 6, 55)
+        let found = RunProjection.untils(steps: [step(10, target: date(2026, 9, 21, 7, 10)),
+                                                 step(20, target: date(2026, 9, 21, 7, 30))],
+                                         from: start)
+        #expect(found == [date(2026, 9, 21, 7, 5), date(2026, 9, 21, 7, 25)])
     }
 
-    @Test func aCurrentStepThatWaitsForATapProjectsNothing() {
-        let start = date(2026, 9, 21, 7, 0)
-        let found = RunProjection.boundaries(steps: [step(10, auto: false), step(20)],
-                                             currentIndex: 0, currentStart: start, now: start)
-        #expect(found.isEmpty)
+    /// Started three minutes late: each target passes with the engine still
+    /// on the step. This is where the plate used to go red for three minutes
+    /// at the end of every step. The surfaces move on at the target.
+    @Test func aRunBehindScheduleLeavesEachStepAtItsTarget() {
+        let start = date(2026, 9, 21, 7, 3)
+        let found = RunProjection.untils(steps: [step(10, target: date(2026, 9, 21, 7, 10)),
+                                                 step(20, target: date(2026, 9, 21, 7, 30))],
+                                         from: start)
+        #expect(found == [date(2026, 9, 21, 7, 10), date(2026, 9, 21, 7, 30)])
     }
 
-    /// Mid run, from the step he is on, with the time already spent in it.
-    @Test func projectionStartsFromTheCurrentStepsOwnStart() {
-        let stepTwoBegan = date(2026, 9, 21, 7, 12)
-        let found = RunProjection.boundaries(steps: [step(10), step(20), step(5)],
-                                             currentIndex: 1, currentStart: stepTwoBegan,
-                                             now: date(2026, 9, 21, 7, 20))
-        #expect(found == [
-            .init(entering: 2, at: date(2026, 9, 21, 7, 32)),
-            .init(entering: 3, at: date(2026, 9, 21, 7, 37))
-        ])
-    }
-
-    /// A boundary that already went by belongs to `reconcile`, not to the
-    /// Pi. Later ones still count from it, not from now.
-    @Test func boundariesAlreadyPassedAreLeftOutButStillAnchorTheRest() {
-        let start = date(2026, 9, 21, 7, 0)
-        let found = RunProjection.boundaries(steps: [step(10), step(20)],
-                                             currentIndex: 0, currentStart: start,
-                                             now: date(2026, 9, 21, 7, 15))
-        #expect(found == [.init(entering: 2, at: date(2026, 9, 21, 7, 30))])
+    /// A step that waits for a tap is left at its target, not held until the
+    /// tap, and projection carries on past it. It used to stop there, and the
+    /// plate sat on that step red and counting up. Past it the engine's own
+    /// walk is unknowable, so later steps are left at their targets even
+    /// though the run began early.
+    @Test func aStepThatWaitsForATapIsLeftAtItsTargetAndSoIsEverythingAfterIt() {
+        let start = date(2026, 9, 21, 6, 55)
+        let found = RunProjection.untils(steps: [step(10, target: date(2026, 9, 21, 7, 10)),
+                                                 step(20, target: date(2026, 9, 21, 7, 30), auto: false),
+                                                 step(5, target: date(2026, 9, 21, 7, 35))],
+                                         from: start)
+        #expect(found == [date(2026, 9, 21, 7, 5), date(2026, 9, 21, 7, 30), date(2026, 9, 21, 7, 35)])
     }
 }

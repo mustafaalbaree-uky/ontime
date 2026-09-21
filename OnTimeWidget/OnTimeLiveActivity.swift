@@ -2,11 +2,10 @@ import ActivityKit
 import SwiftUI
 import WidgetKit
 
-/// Phase resolution, the ring's span guard, the late range and the
-/// over-state caption all live in `Shared/OnTimeActivityLogic.swift` — pure
-/// functions both targets compile, so the app's test target can pin them
-/// down. `RunPhase` here is just a local name for the shared enum.
-private typealias RunPhase = OnTimeActivityPhase
+/// Which step is on show and the ring's span guard live in `Shared/` (see
+/// `OnTimeShown` and `ContentState.shown(isStale:now:)`): pure functions both
+/// targets compile, so the app's test target can pin them down. Every view
+/// here is handed the state already resolved, never `context.state` itself.
 
 // MARK: - What a Live Activity can and cannot do
 //
@@ -20,8 +19,9 @@ private typealias RunPhase = OnTimeActivityPhase
 // and the run page use: 0.95 for the step you are on, 0.30 for the ones
 // behind it, 0.12 for the ones ahead. The one thing that must keep moving
 // without the app, the ring, stays a `ProgressView(timerInterval:)` and is
-// tinted white; colour on it is reserved for late and finished, which are
-// states rather than decoration.
+// tinted white. The one colour on this plate is green for a finished run. A
+// step whose time has passed is not drawn at all: the plate is on the next
+// step by then (`ContentState.shown`), and a run with no step left is ended.
 //
 // The type is look A, the same as the app: SF Pro at regular weight, the
 // countdown thin, sentence case, no tracking, pips all one height, and a
@@ -34,18 +34,6 @@ private extension OnTimeActivityAttributes.ContentState {
         OnTimeActivityLogic.ringInterval(segmentStart: segmentStart, targetLeaveBy: targetLeaveBy)
     }
 
-    var lateInterval: ClosedRange<Date> {
-        OnTimeActivityLogic.lateInterval(target: targetLeaveBy)
-    }
-
-    var overCaption: String {
-        OnTimeActivityLogic.overCaption(
-            latenessMinutes: latenessMinutes,
-            isWaiting: isWaiting,
-            startsRunAtTarget: startsRunAtTarget
-        )
-    }
-
     /// `targetLabel` arrives with a trailing space by convention; enforcing
     /// the separator here means a future label without one renders as
     /// "Finish by 7:15" instead of "Finish by7:15".
@@ -56,14 +44,15 @@ private extension OnTimeActivityAttributes.ContentState {
     var glyph: String {
         isWaiting ? "hourglass" : symbol
     }
+
+    var caption: String {
+        isFinished ? "finished" : (isWaiting ? "until start" : "until due")
+    }
 }
 
-/// The countdown, in the only two forms it is ever allowed to take.
-///
-/// Running: counts down and stops at 0:00, because a `Text(timerInterval:)`
-/// built from a *range* clamps at both of that range's ends on its own. Over:
-/// counts up from the target, in red, behind an explicit plus sign so it can
-/// never be mistaken for the countdown it just replaced.
+/// The countdown. It counts down and stops at 0:00, because a
+/// `Text(timerInterval:)` built from a *range* clamps at both of that range's
+/// ends on its own.
 ///
 /// The clamping is the whole reason this uses the range form rather than
 /// `Text(_:style: .timer)`, which free-runs past its date and starts climbing
@@ -73,27 +62,14 @@ private extension OnTimeActivityAttributes.ContentState {
 /// is the fix.
 private struct CountdownNumber: View {
     let state: OnTimeActivityAttributes.ContentState
-    let phase: RunPhase
     let size: CGFloat
 
     var body: some View {
-        switch phase {
-        case .finished:
+        if state.isFinished {
             Text("Done")
                 .onTimeNumeral(size)
                 .foregroundStyle(OnTimeSpectrum.done)
-        case .over:
-            HStack(spacing: 0) {
-                Text("+")
-                    .onTimeNumeral(size)
-                Text(timerInterval: state.lateInterval, countsDown: false)
-                    .onTimeNumeral(size)
-                    .multilineTextAlignment(.trailing)
-            }
-            .foregroundStyle(OnTimeSpectrum.late)
-            .minimumScaleFactor(0.5)
-            .lineLimit(1)
-        case .running:
+        } else {
             Group {
                 if let interval = state.ringInterval {
                     Text(timerInterval: interval, countsDown: true)
@@ -116,13 +92,12 @@ private struct CountdownNumber: View {
 /// and the Lock Screen say the same thing in the same way.
 private struct StepPips: View {
     let state: OnTimeActivityAttributes.ContentState
-    let phase: RunPhase
 
     var body: some View {
         HStack(spacing: 3) {
             ForEach(0..<max(state.totalBlocks, 1), id: \.self) { i in
-                let passed = phase == .finished || i < state.blockIndex
-                let current = phase != .finished && i == state.blockIndex
+                let passed = state.isFinished || i < state.blockIndex
+                let current = !state.isFinished && i == state.blockIndex
                 RoundedRectangle(cornerRadius: 1.5)
                     .fill(current ? Color.white.opacity(0.95)
                           : (passed ? Color.white.opacity(0.30) : Color.white.opacity(0.12)))
@@ -136,9 +111,8 @@ struct OnTimeLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: OnTimeActivityAttributes.self) { context in
             LockScreenLiveActivityView(
-                state: context.state,
-                planId: context.attributes.planId,
-                phase: .resolve(context.state, isStale: context.isStale)
+                state: context.state.shown(isStale: context.isStale),
+                planId: context.attributes.planId
             )
             .padding(.horizontal, 16)
             .padding(.vertical, 14)
@@ -147,15 +121,13 @@ struct OnTimeLiveActivity: Widget {
             .activityBackgroundTint(Color.black)
             .activitySystemActionForegroundColor(Color.white)
         } dynamicIsland: { context in
-            let state = context.state
-            let phase = RunPhase.resolve(state, isStale: context.isStale)
+            let state = context.state.shown(isStale: context.isStale)
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
                     HStack(spacing: 8) {
-                        Image(systemName: phase == .finished ? "checkmark.circle.fill" : state.glyph)
+                        Image(systemName: state.isFinished ? "checkmark.circle.fill" : state.glyph)
                             .font(.system(size: 18))
-                            .foregroundStyle(phase == .finished ? OnTimeSpectrum.done
-                                             : (phase == .over ? OnTimeSpectrum.late : OnTimeSpectrum.primaryText))
+                            .foregroundStyle(state.isFinished ? OnTimeSpectrum.done : OnTimeSpectrum.primaryText)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(state.isWaiting ? "Until start" : state.blockName)
                                 .font(.system(size: 17))
@@ -173,10 +145,10 @@ struct OnTimeLiveActivity: Widget {
 
                 DynamicIslandExpandedRegion(.trailing) {
                     VStack(alignment: .trailing, spacing: 2) {
-                        CountdownNumber(state: state, phase: phase, size: 36)
-                        Text(caption(state: state, phase: phase))
+                        CountdownNumber(state: state, size: 36)
+                        Text(state.caption)
                             .font(.system(size: 11.5))
-                            .foregroundStyle(phase == .over ? OnTimeSpectrum.late : OnTimeSpectrum.secondaryText)
+                            .foregroundStyle(OnTimeSpectrum.secondaryText)
                             .lineLimit(1)
                     }
                     .padding(.trailing, 4)
@@ -184,43 +156,34 @@ struct OnTimeLiveActivity: Widget {
 
                 DynamicIslandExpandedRegion(.bottom) {
                     VStack(spacing: 8) {
-                        StepPips(state: state, phase: phase)
+                        StepPips(state: state)
                         // No action button while waiting — there's no step
                         // running yet to complete. None once finished
                         // either: there is nothing left to complete, and
                         // offering the button would invite a tap that does
                         // nothing.
-                        if !state.isWaiting && phase != .finished {
-                            CompleteButton(state: state, planId: context.attributes.planId, phase: phase)
+                        if !state.isWaiting && !state.isFinished {
+                            CompleteButton(state: state, planId: context.attributes.planId)
                         }
                     }
                     .padding(.top, 2)
                 }
             } compactLeading: {
                 HStack(spacing: 4) {
-                    Image(systemName: phase == .finished ? "checkmark.circle.fill" : state.glyph)
-                        .foregroundStyle(phase == .finished ? OnTimeSpectrum.done
-                                         : (phase == .over ? OnTimeSpectrum.late : OnTimeSpectrum.primaryText))
-                    if !state.isWaiting && phase != .finished {
+                    Image(systemName: state.isFinished ? "checkmark.circle.fill" : state.glyph)
+                        .foregroundStyle(state.isFinished ? OnTimeSpectrum.done : OnTimeSpectrum.primaryText)
+                    if !state.isWaiting && !state.isFinished {
                         Text("\(state.blockIndex + 1)/\(state.totalBlocks)")
                             .font(.system(size: 12.5))
                             .foregroundStyle(OnTimeSpectrum.secondaryText)
                     }
                 }
             } compactTrailing: {
-                CountdownNumber(state: state, phase: phase, size: 15)
+                CountdownNumber(state: state, size: 15)
                     .frame(width: 58, alignment: .trailing)
             } minimal: {
-                CountdownRing(state: state, phase: phase)
+                CountdownRing(state: state)
             }
-        }
-    }
-
-    private func caption(state: OnTimeActivityAttributes.ContentState, phase: RunPhase) -> String {
-        switch phase {
-        case .finished: return "finished"
-        case .over: return state.overCaption
-        case .running: return state.isWaiting ? "until start" : "until due"
         }
     }
 }
@@ -229,10 +192,11 @@ struct OnTimeLiveActivity: Widget {
 private struct CompleteButton: View {
     let state: OnTimeActivityAttributes.ContentState
     let planId: String
-    let phase: RunPhase
 
     var body: some View {
-        Button(intent: CompleteStepIntent(planId: planId)) {
+        // The step on the plate, which the clock may have moved past the one
+        // the app last sent. The tap completes what he is looking at.
+        Button(intent: CompleteStepIntent(planId: planId, step: state.blockIndex)) {
             HStack {
                 Spacer()
                 Label(state.blockIndex + 1 >= state.totalBlocks ? "Finish" : "Next Step",
@@ -242,9 +206,7 @@ private struct CompleteButton: View {
             }
             .padding(.vertical, 9)
             // The app's primary button: white plate, black text, 10 pt corner,
-            // no outline. It stays white once the step is over. The outline it
-            // used to have turned red then; the red countdown above carries
-            // that state on its own.
+            // no outline.
             .background(OnTimeSpectrum.primaryText)
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .foregroundStyle(OnTimeSpectrum.ink)
@@ -262,35 +224,28 @@ private struct CompleteButton: View {
 /// anything hand-drawn would freeze at whatever fraction was last pushed. The
 /// ring therefore depletes on its own, in white. It used to be tinted by a
 /// green to red ramp pushed twenty times a step; how far the ring has
-/// depleted already says how much is left, and the two colours this plate
-/// spends are late and finished.
+/// depleted already says how much is left, and the one colour this plate
+/// spends is green for finished.
 private struct CountdownRing: View {
     let state: OnTimeActivityAttributes.ContentState
-    let phase: RunPhase
 
     private var tint: Color { OnTimeSpectrum.primaryText }
 
     var body: some View {
-        switch phase {
-        case .finished:
+        if state.isFinished {
             Image(systemName: "checkmark.circle.fill")
                 .foregroundStyle(OnTimeSpectrum.done)
-        case .over:
-            Circle()
-                .strokeBorder(OnTimeSpectrum.late, lineWidth: 3)
-        case .running:
-            if let interval = state.ringInterval {
-                ProgressView(timerInterval: interval, countsDown: true) {
-                    EmptyView()
-                } currentValueLabel: {
-                    EmptyView()
-                }
-                .progressViewStyle(.circular)
-                .tint(tint)
-            } else {
-                Circle()
-                    .strokeBorder(tint, lineWidth: 3)
+        } else if let interval = state.ringInterval {
+            ProgressView(timerInterval: interval, countsDown: true) {
+                EmptyView()
+            } currentValueLabel: {
+                EmptyView()
             }
+            .progressViewStyle(.circular)
+            .tint(tint)
+        } else {
+            Circle()
+                .strokeBorder(tint, lineWidth: 3)
         }
     }
 }
@@ -298,18 +253,13 @@ private struct CountdownRing: View {
 private struct LockScreenLiveActivityView: View {
     let state: OnTimeActivityAttributes.ContentState
     let planId: String
-    let phase: RunPhase
 
     // The Lock Screen view pins a black background, and the system chooses
     // the rendering colour scheme independently of that — adaptive
     // `.primary`/`.secondary` could resolve to near-black on the forced dark
     // plate. Explicit whites match the committed background.
     private var accent: Color {
-        switch phase {
-        case .finished: return OnTimeSpectrum.done
-        case .over: return OnTimeSpectrum.late
-        case .running: return OnTimeSpectrum.primaryText
-        }
+        state.isFinished ? OnTimeSpectrum.done : OnTimeSpectrum.primaryText
     }
 
     var body: some View {
@@ -342,19 +292,18 @@ private struct LockScreenLiveActivityView: View {
                 Spacer(minLength: 4)
 
                 VStack(alignment: .trailing, spacing: 1) {
-                    CountdownNumber(state: state, phase: phase, size: 44)
-                    Text(phase == .over ? state.overCaption
-                         : (phase == .finished ? "finished" : (state.isWaiting ? "until start" : "until due")))
+                    CountdownNumber(state: state, size: 44)
+                    Text(state.caption)
                         .font(.system(size: 11.5))
-                        .foregroundStyle(phase == .over ? OnTimeSpectrum.late : OnTimeSpectrum.secondaryText)
+                        .foregroundStyle(OnTimeSpectrum.secondaryText)
                         .lineLimit(1)
                 }
             }
 
-            StepPips(state: state, phase: phase)
+            StepPips(state: state)
 
-            if !state.isWaiting && phase != .finished {
-                CompleteButton(state: state, planId: planId, phase: phase)
+            if !state.isWaiting && !state.isFinished {
+                CompleteButton(state: state, planId: planId)
             }
         }
     }
@@ -365,7 +314,7 @@ private struct LockScreenLiveActivityView: View {
         ZStack {
             Circle()
                 .stroke(Color.white.opacity(0.12), lineWidth: 3)
-            if phase == .running, let interval = state.ringInterval {
+            if !state.isFinished, let interval = state.ringInterval {
                 ProgressView(timerInterval: interval, countsDown: true) {
                     EmptyView()
                 } currentValueLabel: {
@@ -377,7 +326,7 @@ private struct LockScreenLiveActivityView: View {
                 Circle()
                     .stroke(accent, lineWidth: 3)
             }
-            Image(systemName: phase == .finished ? "checkmark" : state.glyph)
+            Image(systemName: state.isFinished ? "checkmark" : state.glyph)
                 .font(.system(size: 16))
                 .foregroundStyle(accent)
         }

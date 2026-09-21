@@ -82,4 +82,72 @@ struct OnTimeWidgetSnapshotTests {
         #expect(points.contains(first))
         #expect(points.contains(second))
     }
+
+    // MARK: - A live run moves on by the clock
+
+    private func step(_ index: Int, until: Date) -> OnTimeShownStep {
+        OnTimeShownStep(name: "Step \(index + 1)", symbol: "circle", index: index,
+                        target: until, targetLabel: "Finish by", until: until)
+    }
+
+    private func run(now: Date, later: [OnTimeShownStep]) -> OnTimeWidgetSnapshot.LiveRun {
+        OnTimeWidgetSnapshot.LiveRun(
+            id: UUID().uuidString, name: "Morning", deadline: now.addingTimeInterval(1800),
+            stepName: "Step 1", symbol: "circle", stepIndex: 0, totalSteps: 3,
+            segmentStart: now.addingTimeInterval(-300), target: now.addingTimeInterval(600),
+            targetLabel: "Finish by", isWaiting: false, until: now.addingTimeInterval(600), later: later
+        )
+    }
+
+    /// The app is suspended for the whole routine, so the snapshot on disk is
+    /// the one written at step 1. The widget used to go red at the first
+    /// boundary and stay red to the end.
+    @Test("A snapshot written at step 1 shows step 2 once step 1's time has passed")
+    func liveRunMovesOn() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let second = step(1, until: now.addingTimeInterval(1200))
+        let third = step(2, until: now.addingTimeInterval(1800))
+        let snapshot = OnTimeWidgetSnapshot(runs: [run(now: now, later: [second, third])])
+
+        #expect(snapshot.liveRuns(at: now).first?.stepIndex == 0)
+
+        let shown = snapshot.liveRuns(at: now.addingTimeInterval(601)).first
+        #expect(shown?.stepIndex == 1)
+        #expect(shown?.stepName == "Step 2")
+        #expect(shown?.target == second.target)
+        #expect(shown?.segmentStart == now.addingTimeInterval(600))
+    }
+
+    @Test("A run whose last step's time has passed is gone, not shown as over")
+    func liveRunDropsOff() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let snapshot = OnTimeWidgetSnapshot(runs: [run(now: now, later: [step(1, until: now.addingTimeInterval(1200))])])
+
+        #expect(snapshot.liveRuns(at: now.addingTimeInterval(1199)).count == 1)
+        #expect(snapshot.liveRuns(at: now.addingTimeInterval(1200)).isEmpty)
+    }
+
+    @Test("The widget re-renders at every step boundary of a live run")
+    func changePointsIncludeEveryStep() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let second = step(1, until: now.addingTimeInterval(1200))
+        let snapshot = OnTimeWidgetSnapshot(runs: [run(now: now, later: [second])])
+
+        let points = snapshot.changePoints(after: now)
+
+        #expect(points.contains(now.addingTimeInterval(600)))
+        #expect(points.contains(second.until))
+    }
+
+    @Test("A snapshot file from before later existed still decodes")
+    func oldSnapshotDecodes() throws {
+        let old = """
+        {"generatedAt":780000000,"upcoming":[],"runs":[{"id":"a","name":"Morning","deadline":780003600,
+         "stepName":"Shower","symbol":"shower","stepIndex":1,"totalSteps":4,"segmentStart":780000000,
+         "target":780000600,"targetLabel":"Finish by","isWaiting":false}]}
+        """
+        let decoded = try JSONDecoder().decode(OnTimeWidgetSnapshot.self, from: Data(old.utf8))
+        #expect(decoded.runs.first?.until == decoded.runs.first?.target)
+        #expect(decoded.runs.first?.later.isEmpty == true)
+    }
 }

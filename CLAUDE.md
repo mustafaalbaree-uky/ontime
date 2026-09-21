@@ -183,6 +183,72 @@ Do not "improve" that ring into a gradient: it would stop moving.
 `RunEngine.rampBucket` still throttles the pushes; nothing takes a colour from
 it any more.
 
+**The Live Activity and the Home Screen widget never say a step is over.** On
+21 Sep 2026 he said he did not like that they "ever turn red and start saying
+plus", and wanted them to "just move on to the next one", or for the last
+step, "just turn off". They used to show a passed target in `late` red,
+counting up behind a `+`, and that was most of what he saw: the widget only
+ever knew the current step, so with the app suspended it went red at the first
+boundary and stayed red to the end of the routine, and the plate went red for
+the last minutes of every step of a run that was behind, and for good on a
+step waiting for a tap. Do not bring a red, a `+` or an "over" caption back to
+either surface. LiveRunPage and RunView still show lateness; this rule is
+about the two surfaces he reads without opening the app.
+
+- **Each surface carries the rest of the run, as absolute times.**
+  `RunEngine.shownTimeline` is the one list both are built from: the step on
+  show, then every step after it as an `OnTimeShownStep` with its `target`
+  (the solution's leave by, what the countdown aims at) and its `until` (when
+  the surface leaves it). The activity's `ContentState` has `until` and
+  `later` (capped at `laterLimit`, because ActivityKit and APNs both refuse
+  more than 4 KB); the snapshot's `LiveRun` has the same two with no cap.
+  `PiSchedule.armEvent` fills `later` from the routine, so a wait plate nobody
+  updates still rolls into step 1.
+- **One pure rule picks the step.** `OnTimeShown.resolve`: drop every step
+  whose `until` is at or before now, show the first one left, and when none is
+  left the run is over for that surface. `ContentState.shown(isStale:now:)`
+  and `LiveRun.shown(at:)` apply it, and every view is handed the result,
+  never the raw state. The tests are in `ActivityLogicTests` and
+  `OnTimeWidgetSnapshotTests`.
+- **`until` is `min(target, the engine's own boundary)`**
+  (`RunProjection.untils`). While every step moves on by itself that is
+  `reconcile()` run forward, so a run ahead of schedule leaves a step on its
+  estimate, when the engine does. It is never later than the target: a run
+  that is behind, a step waiting for a tap and an open duration step all reach
+  their target with the engine still on them, and the surfaces move on anyway.
+  Past the first step that does not move on by itself the engine's walk is
+  unknowable, so every later step is left at its target.
+- **So the first shown step is not always the engine's.** `shownTimeline`
+  drops what has gone by before anything is pushed or written. When nothing is
+  left and the run is still open (a last step waiting for a tap), `steps` is
+  empty: the engine ends the activity, `WidgetBridge` leaves the run out, and
+  the run is finished by hand in the app.
+- **The plate can make one move by itself.** A Live Activity re-renders on a
+  push, an update, and once at its stale date, which is the head's `until`
+  (`LiveActivityManager.staleDate`). `isStale` alone counts as the head having
+  passed, because the re-render can land a hair early. Every boundary after
+  that one needs the Pi or the app. With neither, the plate holds at 0:00 in
+  white on the step it reached; it does not go red. The widget has no such
+  limit: `changePoints` gives it a timeline entry at every `until`.
+- **Ending is immediate.** `LiveActivityManager.end` is the only way an
+  activity ends, with `.immediate`, and the Pi's end push carries a
+  `dismissal-date` already past. A finished run used to leave a green "Done"
+  plate up for ten seconds (two minutes by push). "Done" is now only what a
+  plate shows when its last `until` passed and neither the Pi nor the app was
+  there to take it down.
+- **The button names the step on the plate.** `CompleteStepIntent` carries
+  `step`, and `RunEngine.completeShownStep` catches the engine up first, then
+  ignores a tap on a step the engine has already passed (it used to complete
+  whichever step came next), and reaches a step the plate got to first by
+  closing each one before it at the moment the plate left it, with no
+  duration sample, because nobody saw those end. A notification's "Next Step"
+  names no step and completes the engine's current one.
+- **Both new fields decode when missing** (`init(from:)` on `ContentState` and
+  `LiveRun`). The Pi holds a week of start pushes and the App Group holds a
+  snapshot, both written by the build before. `tools/install.sh` does not
+  launch the app, and ActivityKit answers a payload it cannot decode by doing
+  nothing.
+
 **Four tabs: Now, Active, Work, Settings.** It used to be six — Plans, Routines
 and Templates each had their own, which exposed the persistence schema
 (`TaskTemplate` → `Routine` → `Plan` → `Run`) as navigation, so no tab label
@@ -332,19 +398,18 @@ Things about it that were each found the hard way:
   `push-tokens.json`).
 
 **The Pi also moves a running activity to its next step, and ends it.** The
-app is suspended within seconds of leaving the foreground, so a step that ran
-out used to sit in the Island red and counting up until the app was opened,
-with the run in fact two steps further on. `RunEngine.projectedActivitySteps`
-is `reconcile()` run forward in imagination (the pure walk is
-`RunProjection.boundaries`, which is where the tests are): every auto
-advancing step ends on its estimate, and projection stops at the first step
-that waits for a tap, because past it "over, waiting on you" is the truth and
-the staleness re-render already shows it. While waiting, the first entry is
-the rollover into step 1. Each entry carries the full `ContentState` for the
-step being entered, with its target read from the solution exactly as
-`leaveByDate` reads it, so a pushed step and the step the app would have shown
-cannot disagree. `PiSchedule.publishRun` is called on every engine sync and
-dedupes on the encoded body.
+app is suspended within seconds of leaving the foreground, and the plate can
+move on by itself only once (see the rule above about never saying a step is
+over), so a routine of five steps needs somebody to deliver the other
+boundaries. `RunEngine.projectedActivitySteps` turns `shownTimeline` into one
+event per boundary: at each step's `until`, the plate for the step after it,
+and at the last `until`, an end. It does not stop at a step that waits for a
+tap any more; that step is left at its target like any other. While waiting,
+the first entry is the rollover into step 1. Each entry carries the full
+`ContentState` for the step being entered, `later` included, with its target
+read from the solution exactly as `leaveByDate` reads it, so a pushed step and
+the step the app would have shown cannot disagree. `PiSchedule.publishRun` is
+called on every engine sync and dedupes on the encoded body.
 
 - **An update goes to the activity's own token, not the push to start
   token.** `LiveActivityManager.start` requests with `pushType: .token`, and
@@ -360,12 +425,16 @@ dedupes on the encoded body.
   the moved boundaries have to be new events, not ones the Pi believes it
   already sent.
 - **The Pi sends two seconds early** (`PiSchedule.pushLead`). The activity
-  goes stale at the boundary and re-renders as over, so a push landing just
-  after it shows a flash of red first.
+  goes stale at the boundary and moves on from the list it holds, which is one
+  push older than the one about to land, and an end landing after the
+  boundary shows a flash of "Done" first.
 - **One upload at a time.** An upload replaces the Pi's whole list, so two in
   flight could land out of order and leave the older list in place.
 - A walk entered by push has no `WalkTracker` behind it until the app runs, so
-  it is labelled "Home by" rather than counting to a turnaround.
+  it is labelled "Home by" rather than counting to a turnaround. With a
+  tracker measuring, the turnaround is a shown step of its own ahead of the
+  walk's "Home by", and the surfaces move from one to the other like any
+  other boundary.
 
 The Pi is given a week of occurrences per routine
 (`ScheduleService.upcomingOccurrences`), for the reason the widget snapshot
@@ -512,11 +581,10 @@ Three things about it that are load-bearing:
   only left `.outbound` on a tap would be in the wrong phase most of the
   time. A sustained 150 m of closing distance counts as a turnaround.
 
-The walk feeds its own `targetLeaveBy` / `targetLabel` into the Live
-Activity (the turnaround while heading out, the be-home-by time once heading
-back): the ring and its green-to-red ramp draw whatever span they are
-handed. The widget's display logic (phase resolution, the ring's span
-guard, the ramp fraction, the over-state caption) lives in
+The walk feeds its own target and label into the Live Activity (the
+turnaround while heading out, the be-home-by time once heading back): the
+ring draws whatever span it is handed. The widget's display logic (which step
+is on show, the ring's span guard, the ramp fraction) lives in
 `Shared/OnTimeActivityLogic.swift` as pure functions both targets compile,
 so `ActivityLogicTests` in the app's test target covers it — the widget
 target itself has no tests. The cross-process string constants (the
@@ -528,8 +596,7 @@ it counts down to its date and then, with no sign, no colour change and no
 relabelling of its own, starts counting up. A number rising through 00:41
 looks exactly like a number falling through 00:41, which is the whole reason
 the activity read as broken once a step ran over. Every countdown in this app
-now takes one of two forms, and `LiveRunPage` uses the same two so the phone
-and the Lock Screen say the same thing at the same moment:
+now takes one of two forms:
 
 - Running: `Text(timerInterval:countsDown:)` over the step's `ClosedRange`.
   The range form clamps at both ends by itself, which is the entire fix.
@@ -537,12 +604,10 @@ and the Lock Screen say the same thing at the same moment:
   as *paused* rather than as running-until-paused, so the number sits frozen
   and never counts at all — which is how the first attempt at this fix
   shipped a Lock Screen countdown that did not count down.
-- Over: `OnTimeActivityLogic.lateInterval(target:)` counted *up*, in
-  `OnTimeSpectrum.late` red, behind an explicit `+`.
-
-`OnTimeActivityPhase` still decides which of the two (and `endsRunAtTarget`
-still replaces the number entirely with "Done" for a last step that ends
-itself), so the phase truth table is unchanged; only the rendering is.
+- Over: counted *up* from the target, in `OnTimeSpectrum.late` red, behind an
+  explicit `+`. **In the app only** (`LiveRunPage`, `RunView`). The Live
+  Activity and the Home Screen widget have no over form at all: they are on
+  the next step by then, see the rule about never saying a step is over.
 
 **One `.sheet` modifier per view, driven by one optional route enum.**
 SwiftUI honours a single sheet presentation per view: stack several `.sheet`
@@ -727,9 +792,10 @@ none left at the boundary that mattered.
 
 The widget is monochrome for the same reason the run page is, plus one it
 cannot help: a widget cannot animate, and at that size a row of six per-step
-hues is a smear. Countdowns in it obey the same two-form rule as everywhere
-else — `Text(timerInterval:countsDown:)` over a range while running, an
-explicit red `+` counting up once over, never `Text(_:style: .timer)`.
+hues is a smear. Its countdown is `Text(timerInterval:countsDown:)` over a
+range, never `Text(_:style: .timer)`, and it has no colour at all: a step whose
+time has passed is not drawn, because `LiveRun.shown(at:)` has moved the run
+to its next step, or off the widget after its last.
 
 **A `ScheduledRoutine` edit reaches the run it already armed.** A routine's
 blocks are copies (`Block.copyForSpawn`), so nothing about an armed run

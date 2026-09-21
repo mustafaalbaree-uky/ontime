@@ -70,23 +70,8 @@ enum LiveActivityManager {
     }
 
     @discardableResult
-    static func start(
-        planId: String,
-        planName: String,
-        blockName: String,
-        blockIndex: Int,
-        totalBlocks: Int,
-        targetLeaveBy: Date,
-        segmentStart: Date,
-        isFlex: Bool = false,
-        symbol: String = "circle.fill",
-        isWaiting: Bool = false,
-        targetLabel: String = "Finish by ",
-        isOverrun: Bool = false,
-        latenessMinutes: Int? = nil,
-        startsRunAtTarget: Bool = false,
-        endsRunAtTarget: Bool = false
-    ) async -> LiveActivityStartOutcome {
+    static func start(planId: String,
+                      state: OnTimeActivityAttributes.ContentState) async -> LiveActivityStartOutcome {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return .activitiesDisabled }
         // Claim this plan before the first `await` below. A concurrent
         // caller that lost the race reports `.started` rather than
@@ -103,32 +88,13 @@ enum LiveActivityManager {
             activities[planId] = nil
         }
 
-        let attributes = OnTimeActivityAttributes(planId: planId)
-        let state = OnTimeActivityAttributes.ContentState(
-            planName: planName,
-            blockName: blockName,
-            blockIndex: blockIndex,
-            totalBlocks: totalBlocks,
-            targetLeaveBy: targetLeaveBy,
-            segmentStart: segmentStart,
-            isFlex: isFlex,
-            isFinished: false,
-            symbol: symbol,
-            isWaiting: isWaiting,
-            targetLabel: targetLabel,
-            isOverrun: isOverrun,
-            latenessMinutes: latenessMinutes,
-            startsRunAtTarget: startsRunAtTarget,
-            endsRunAtTarget: endsRunAtTarget
-        )
-
         do {
             // `pushType: .token` is what gives this activity a push token at
             // all. Without one the Pi cannot move it to the next step while
             // the app is suspended. See `PushTokens.observeActivities`.
             activities[planId] = try Activity.request(
-                attributes: attributes,
-                content: .init(state: state, staleDate: staleDate(for: targetLeaveBy)),
+                attributes: OnTimeActivityAttributes(planId: planId),
+                content: .init(state: state, staleDate: staleDate(for: state)),
                 pushType: .token
             )
             return .started
@@ -141,74 +107,31 @@ enum LiveActivityManager {
         }
     }
 
-    static func update(
-        planId: String,
-        planName: String,
-        blockName: String,
-        blockIndex: Int,
-        totalBlocks: Int,
-        targetLeaveBy: Date,
-        segmentStart: Date,
-        isFlex: Bool = false,
-        symbol: String = "circle.fill",
-        isWaiting: Bool = false,
-        targetLabel: String = "Finish by ",
-        isOverrun: Bool = false,
-        latenessMinutes: Int? = nil,
-        startsRunAtTarget: Bool = false,
-        endsRunAtTarget: Bool = false
-    ) async {
+    static func update(planId: String, state: OnTimeActivityAttributes.ContentState) async {
         guard let activity = current(for: planId) else { return }
-        let state = OnTimeActivityAttributes.ContentState(
-            planName: planName,
-            blockName: blockName,
-            blockIndex: blockIndex,
-            totalBlocks: totalBlocks,
-            targetLeaveBy: targetLeaveBy,
-            segmentStart: segmentStart,
-            isFlex: isFlex,
-            isFinished: false,
-            symbol: symbol,
-            isWaiting: isWaiting,
-            targetLabel: targetLabel,
-            isOverrun: isOverrun,
-            latenessMinutes: latenessMinutes,
-            startsRunAtTarget: startsRunAtTarget,
-            endsRunAtTarget: endsRunAtTarget
-        )
-        await activity.update(.init(state: state, staleDate: staleDate(for: targetLeaveBy)))
+        await activity.update(.init(state: state, staleDate: staleDate(for: state)))
     }
 
-    /// The step's own target, so ActivityKit re-renders the activity at
-    /// exactly that moment and the widget can say what is true from then
-    /// on. This used to sit an hour past the target, which is why a run
-    /// whose deadline came and went while the phone was in a pocket kept
-    /// showing a bare number climbing: nothing was scheduled to tell the
-    /// widget anything had changed, and the app was suspended and could
-    /// not.
+    /// The moment the plate leaves its step, so ActivityKit re-renders the
+    /// activity at exactly that moment and the widget moves on to the step
+    /// after it (`ContentState.shown`). This used to sit an hour past the
+    /// target, which is why a run whose deadline came and went while the
+    /// phone was in a pocket kept showing a bare number climbing: nothing
+    /// was scheduled to tell the widget anything had changed, and the app
+    /// was suspended and could not.
     ///
     /// **Load-bearing contract**: every `start` and `update` must go
-    /// through this. The widget's whole after-death display
-    /// (`OnTimeActivityPhase.resolve` reading `context.isStale`) and this
-    /// manager's own `isLive` check both assume staleness means "the target
-    /// passed", so an update path that omits the stale date silently
-    /// reintroduces the endless count-up bug. `finish` alone passes nil,
-    /// deliberately, because a finished activity has no future target.
-    private static func staleDate(for target: Date) -> Date {
-        max(target, Date().addingTimeInterval(1))
+    /// through this. The widget's whole after-death display and this
+    /// manager's own `isLive` check both assume staleness means "this
+    /// step's time passed", so an update path that omits the stale date
+    /// leaves the plate sitting on a finished step at 0:00.
+    private static func staleDate(for state: OnTimeActivityAttributes.ContentState) -> Date {
+        max(state.until, Date().addingTimeInterval(1))
     }
 
-    /// Normal end-of-run: reached the last step successfully.
-    static func finish(planId: String) async {
-        guard let activity = current(for: planId) else { return }
-        var state = activity.content.state
-        state.isFinished = true
-        await activity.end(.init(state: state, staleDate: nil), dismissalPolicy: .after(.now + 10))
-        activities[planId] = nil
-    }
-
-    /// Explicit cancel of one run's activity — immediate dismissal, no
-    /// "finished" state shown, since the run wasn't actually completed.
+    /// Ends one run's activity and takes it off the Lock Screen at once,
+    /// whether the run was finished, cancelled, or ran out of steps to show.
+    /// A finished run used to leave a green "Done" plate up for ten seconds.
     static func end(planId: String) async {
         guard let activity = current(for: planId) else { return }
         await activity.end(nil, dismissalPolicy: .immediate)

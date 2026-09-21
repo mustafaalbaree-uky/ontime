@@ -25,35 +25,22 @@ public struct OnTimeActivityAttributes: ActivityAttributes {
         /// it used to hardcode "Arrive by " unconditionally, which was wrong
         /// for any non-drive block ("Arrive by 7:15" on a "Get Ready" step).
         public var targetLabel: String
-        /// True once `targetLeaveBy` has passed for a currently-active,
-        /// non-flex block that isn't eligible to auto-advance (either
-        /// auto-advance is off, or this block is pinned open-ended-false) —
-        /// i.e. the run is genuinely just waiting on a manual "Complete
-        /// Step" tap, not broken. Lets the widget stop implying urgency
-        /// (no more bare countdown ticking past zero with no explanation)
-        /// and instead say plainly that it's waiting on you.
-        public var isOverrun: Bool
-        /// How many minutes past `plan.deadline` the run is currently
-        /// projected to finish, recomputed live from the solver — only
-        /// shown once `isOverrun`, answering "how is this pushing my final
-        /// deadline" instead of just showing a step counting up with no
-        /// context. <= 0 means still on track; nil means the app has no
-        /// current number (no solution, or the wait phase), and the widget
-        /// renders it via `OnTimeActivityLogic.overCaption` rather than
-        /// claiming anything about lateness.
-        public var latenessMinutes: Int?
-        /// True while waiting when the run will begin step 1 on its own the
-        /// moment the start time arrives (backdated on the next app wake).
-        /// Lets the widget say "step 1 underway" for a passed wait target
-        /// instead of the false "waiting on you".
-        public var startsRunAtTarget: Bool
-        /// True when this is the last step and it ends the run by itself
-        /// at `targetLeaveBy`. The app is usually suspended by then and
-        /// cannot end anything, so the widget uses this together with
-        /// `context.isStale` to show a finished run at the deadline
-        /// instead of a countdown that ticks upward until someone opens
-        /// the app.
-        public var endsRunAtTarget: Bool
+        /// When the plate leaves this step for the next one. The target, or
+        /// sooner when the run is ahead of its schedule. It is also the stale
+        /// date, so ActivityKit re-renders the plate at exactly this moment.
+        public var until: Date
+        /// The steps after this one, in order. The app is usually suspended
+        /// when a step's time runs out and cannot update anything, so the
+        /// plate carries what comes next and `shown(isStale:now:)` moves on
+        /// by the clock. It used to turn red and count up behind a plus sign
+        /// instead.
+        public var later: [OnTimeShownStep]
+
+        /// ActivityKit refuses a content state over 4 KB, and so does APNs.
+        /// A step is about 170 bytes, and every push and every update brings
+        /// a fresh list, so a long routine loses nothing by carrying only
+        /// its next few.
+        public static let laterLimit = 8
 
         public init(
             planName: String,
@@ -67,10 +54,8 @@ public struct OnTimeActivityAttributes: ActivityAttributes {
             symbol: String = "circle.fill",
             isWaiting: Bool = false,
             targetLabel: String = "Finish by ",
-            isOverrun: Bool = false,
-            latenessMinutes: Int? = nil,
-            startsRunAtTarget: Bool = false,
-            endsRunAtTarget: Bool = false
+            until: Date? = nil,
+            later: [OnTimeShownStep] = []
         ) {
             self.planName = planName
             self.blockName = blockName
@@ -83,10 +68,58 @@ public struct OnTimeActivityAttributes: ActivityAttributes {
             self.symbol = symbol
             self.isWaiting = isWaiting
             self.targetLabel = targetLabel
-            self.isOverrun = isOverrun
-            self.latenessMinutes = latenessMinutes
-            self.startsRunAtTarget = startsRunAtTarget
-            self.endsRunAtTarget = endsRunAtTarget
+            self.until = until ?? targetLeaveBy
+            self.later = Array(later.prefix(Self.laterLimit))
+        }
+
+        /// A payload built before `until` and `later` existed still decodes.
+        /// The Pi holds a week of start pushes, and a build installed and
+        /// not yet opened would otherwise fail to decode every one of them,
+        /// which ActivityKit answers by doing nothing at all.
+        public init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            planName = try values.decode(String.self, forKey: .planName)
+            blockName = try values.decode(String.self, forKey: .blockName)
+            blockIndex = try values.decode(Int.self, forKey: .blockIndex)
+            totalBlocks = try values.decode(Int.self, forKey: .totalBlocks)
+            targetLeaveBy = try values.decode(Date.self, forKey: .targetLeaveBy)
+            segmentStart = try values.decode(Date.self, forKey: .segmentStart)
+            isFlex = try values.decode(Bool.self, forKey: .isFlex)
+            isFinished = try values.decode(Bool.self, forKey: .isFinished)
+            symbol = try values.decode(String.self, forKey: .symbol)
+            isWaiting = try values.decode(Bool.self, forKey: .isWaiting)
+            targetLabel = try values.decode(String.self, forKey: .targetLabel)
+            until = try values.decodeIfPresent(Date.self, forKey: .until) ?? targetLeaveBy
+            later = try values.decodeIfPresent([OnTimeShownStep].self, forKey: .later) ?? []
+        }
+
+        /// What to draw at `now`: this state while its step is still on
+        /// show, the step the clock has reached once it is not, and a
+        /// finished plate when there is none left. See `OnTimeShown`.
+        public func shown(isStale: Bool, now: Date = Date()) -> ContentState {
+            guard !isFinished else { return self }
+            var state = self
+            switch OnTimeShown.resolve(until: until, later: later, isStale: isStale, now: now) {
+            case .head:
+                break
+            case .later(let step, let from, let rest):
+                state.blockName = step.name
+                state.blockIndex = step.index
+                state.symbol = step.symbol
+                state.targetLeaveBy = step.target
+                state.targetLabel = step.targetLabel + " "
+                state.until = step.until
+                state.segmentStart = from
+                state.isWaiting = false
+                state.later = rest
+            case .over:
+                // The wait before step 1 is never the end of a run. Only a
+                // payload from before `later` existed can get here, and it
+                // holds at 0:00 rather than claim a routine that has not
+                // begun is done.
+                state.isFinished = !isWaiting
+            }
+            return state
         }
     }
 

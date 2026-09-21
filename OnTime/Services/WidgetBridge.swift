@@ -78,22 +78,27 @@ final class WidgetBridge {
     private func liveRuns(now: Date) -> [OnTimeWidgetSnapshot.LiveRun] {
         RunEngineStore.shared.openEngines.compactMap { engine in
             guard let plan = engine.plan else { return nil }
+            // The same timeline the Live Activity is built from, so the two
+            // are on the same step at the same moment. A run with no step
+            // left to show is left out.
+            let timeline = engine.shownTimeline()
+            if let timeline, timeline.steps.isEmpty { return nil }
+            let head = timeline?.steps.first
             let block = engine.currentBlock
-            let target = engine.isWaitingToStart
-                ? engine.naturalStart
-                : block.flatMap(engine.leaveByDate(for:))
             return OnTimeWidgetSnapshot.LiveRun(
                 id: plan.uuid.uuidString,
                 name: plan.name,
                 deadline: plan.deadline,
-                stepName: block?.name ?? "",
-                symbol: block?.template?.symbol ?? block?.kind.defaultSymbol ?? "timer",
-                stepIndex: engine.run.currentIndex,
+                stepName: head?.name ?? block?.name ?? "",
+                symbol: head?.symbol ?? block?.template?.symbol ?? block?.kind.defaultSymbol ?? "timer",
+                stepIndex: head?.index ?? engine.run.currentIndex,
                 totalSteps: engine.blocks.count,
-                segmentStart: engine.activitySegmentStart,
-                target: target,
-                targetLabel: block.map { engine.targetLabel(for: $0) } ?? "start",
-                isWaiting: engine.isWaitingToStart
+                segmentStart: timeline?.segmentStart ?? engine.activitySegmentStart,
+                target: head?.target,
+                targetLabel: head?.targetLabel ?? block.map { engine.targetLabel(for: $0) } ?? "start",
+                isWaiting: timeline?.isWaiting ?? engine.isWaitingToStart,
+                until: head?.until,
+                later: Array(timeline?.steps.dropFirst() ?? [])
             )
         }
         .sorted { ($0.target ?? $0.deadline) < ($1.target ?? $1.deadline) }

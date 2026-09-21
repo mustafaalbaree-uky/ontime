@@ -13,12 +13,22 @@ public struct CompleteStepIntent: LiveActivityIntent {
     @Parameter(title: "Plan ID")
     public var planId: String
 
+    /// The index of the step the plate was showing when it was tapped. The
+    /// plate moves on by the clock while the app is suspended, so it can be
+    /// ahead of the run the app holds, or behind it. Naming the step lets the
+    /// engine complete what he was looking at, and ignore a tap on a step
+    /// that is already done (`RunEngine.completeShownStep`).
+    @Parameter(title: "Step")
+    public var step: Int
+
     public init() {
         self.planId = ""
+        self.step = 0
     }
 
-    public init(planId: String) {
+    public init(planId: String, step: Int) {
         self.planId = planId
+        self.step = step
     }
 
     @MainActor
@@ -30,13 +40,13 @@ public struct CompleteStepIntent: LiveActivityIntent {
         // reported success. The observer clears the record when it handles
         // the live post; otherwise the next real launch consumes it.
         UserDefaults.standard.set(
-            ["planId": planId, "at": Date().timeIntervalSince1970],
+            ["planId": planId, "step": step, "at": Date().timeIntervalSince1970],
             forKey: OnTimeShared.pendingAdvanceKey
         )
         NotificationCenter.default.post(
             name: OnTimeShared.advanceStepNotification,
             object: nil,
-            userInfo: ["planId": planId]
+            userInfo: ["planId": planId, "step": step]
         )
         return .result()
     }

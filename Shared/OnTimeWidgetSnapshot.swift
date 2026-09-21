@@ -53,10 +53,21 @@ public struct OnTimeWidgetSnapshot: Codable, Equatable {
         /// "leave by", "start", "done by" — the app's own wording.
         public var targetLabel: String
         public var isWaiting: Bool
+        /// When the widget leaves this step for the next one. Nil with
+        /// `target`.
+        public var until: Date?
+        /// The steps after this one. The app is suspended for most of a run
+        /// and rewrites nothing, so the widget carries the rest of the run
+        /// and `shown(at:)` picks the step the clock has reached. When this
+        /// held only the current step, the widget turned red at the first
+        /// boundary and counted up behind a plus sign for the rest of the
+        /// routine.
+        public var later: [OnTimeShownStep]
 
         public init(id: String, name: String, deadline: Date, stepName: String, symbol: String,
                     stepIndex: Int, totalSteps: Int, segmentStart: Date, target: Date?,
-                    targetLabel: String, isWaiting: Bool) {
+                    targetLabel: String, isWaiting: Bool, until: Date? = nil,
+                    later: [OnTimeShownStep] = []) {
             self.id = id
             self.name = name
             self.deadline = deadline
@@ -68,6 +79,55 @@ public struct OnTimeWidgetSnapshot: Codable, Equatable {
             self.target = target
             self.targetLabel = targetLabel
             self.isWaiting = isWaiting
+            self.until = until
+            self.later = later
+        }
+
+        /// A snapshot written before `until` and `later` existed still
+        /// decodes. Without this, the file left by the build before would
+        /// fail as a whole and the widget would show nothing scheduled
+        /// until the app was next opened.
+        public init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            id = try values.decode(String.self, forKey: .id)
+            name = try values.decode(String.self, forKey: .name)
+            deadline = try values.decode(Date.self, forKey: .deadline)
+            stepName = try values.decode(String.self, forKey: .stepName)
+            symbol = try values.decode(String.self, forKey: .symbol)
+            stepIndex = try values.decode(Int.self, forKey: .stepIndex)
+            totalSteps = try values.decode(Int.self, forKey: .totalSteps)
+            segmentStart = try values.decode(Date.self, forKey: .segmentStart)
+            target = try values.decodeIfPresent(Date.self, forKey: .target)
+            targetLabel = try values.decode(String.self, forKey: .targetLabel)
+            isWaiting = try values.decode(Bool.self, forKey: .isWaiting)
+            until = try values.decodeIfPresent(Date.self, forKey: .until) ?? target
+            later = try values.decodeIfPresent([OnTimeShownStep].self, forKey: .later) ?? []
+        }
+
+        /// The run as it stands at `date`: on the step the clock has
+        /// reached, or nil once every step's time has gone by. See
+        /// `OnTimeShown`.
+        public func shown(at date: Date) -> LiveRun? {
+            // Nothing to count to, so nothing to move on from.
+            guard let until else { return deadline > date ? self : nil }
+            switch OnTimeShown.resolve(until: until, later: later, now: date) {
+            case .head:
+                return self
+            case .later(let step, let from, let rest):
+                var run = self
+                run.stepName = step.name
+                run.symbol = step.symbol
+                run.stepIndex = step.index
+                run.segmentStart = from
+                run.target = step.target
+                run.targetLabel = step.targetLabel
+                run.isWaiting = false
+                run.until = step.until
+                run.later = rest
+                return run
+            case .over:
+                return nil
+            }
         }
     }
 
@@ -125,22 +185,21 @@ public struct OnTimeWidgetSnapshot: Codable, Equatable {
             .prefix(limit))
     }
 
+    /// Each run on the step the clock has reached. A run with no step left
+    /// is gone: it is never shown as over.
     public func liveRuns(at date: Date) -> [LiveRun] {
-        // A run whose deadline is more than an hour gone is almost certainly
-        // one the app never got to close (force-quit mid-run). Showing it on
-        // the Home Screen for the rest of the day is worse than showing
-        // nothing.
-        runs.filter { $0.deadline > date.addingTimeInterval(-3600) }
+        runs.compactMap { $0.shown(at: date) }
     }
 
-    /// Every moment the widget's rendering changes: a run's target passing,
-    /// a routine's window opening, an occurrence dropping off the list.
+    /// Every moment the widget's rendering changes: a run moving to its next
+    /// step, a routine's window opening, an occurrence dropping off the list.
     /// `UpNextProvider` turns these into timeline entries so the widget
     /// re-renders exactly when something has actually moved.
     public func changePoints(after date: Date) -> [Date] {
         var dates: [Date] = []
         for run in runs {
-            if let target = run.target { dates.append(target) }
+            if let until = run.until { dates.append(until) }
+            dates.append(contentsOf: run.later.map(\.until))
             dates.append(run.deadline)
         }
         for item in upcoming {
