@@ -41,6 +41,11 @@ struct WorkView: View {
 
                 ScrollView {
                     VStack(alignment: .leading, spacing: InkMetric.section) {
+                        if OnTimeApp.storeIsTemporary {
+                            Text("Saved data did not open on this launch.")
+                                .font(InkType.rowMeta)
+                                .foregroundStyle(OnTimeSpectrum.waiting)
+                        }
                         clockFace
                         todaySection
                         InkCard {

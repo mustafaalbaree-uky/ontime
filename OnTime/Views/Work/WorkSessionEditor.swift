@@ -229,6 +229,7 @@ struct WorkSessionEditor: View {
         } catch {
             print("WorkSessionEditor save failed: \(error)")
         }
+        SheetSync.sync(in: modelContext)
         dismiss()
     }
 }

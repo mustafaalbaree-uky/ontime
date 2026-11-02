@@ -67,48 +67,44 @@ struct OnTimeApp: App {
         }
     }
 
-    /// Opens the store, rebuilding it from scratch if the on-disk schema no
-    /// longer matches `Schema0.models`.
+    /// True when this launch could not open the store on disk and is running
+    /// on an empty one in memory. Nothing done in such a launch is kept on
+    /// the phone; finished work sessions still reach the sheet.
+    static private(set) var storeIsTemporary = false
+
+    /// Opens the store, and never gives it up.
     ///
-    /// There is no `VersionedSchema`/`MigrationPlan` here, so any model
-    /// change — a type removed, a property added — makes the existing store
-    /// unopenable, which previously meant `fatalError` on launch and an app
-    /// that could only be recovered by deleting it from the phone. Nothing
-    /// in this app is irreplaceable (a routine is a name, a time and a few
-    /// steps; the durations it has learned re-accumulate), so trading the
-    /// contents for a launchable app is the right way round. If that ever
-    /// stops being true, this is the function that has to grow a real
-    /// migration plan instead.
+    /// This used to move the store aside and start an empty one after two
+    /// failed opens, on the reasoning that nothing here was irreplaceable.
+    /// Work sessions are. On 24 Oct 2026 at 20:25, with no new build
+    /// installed and so no schema change, a launch failed twice, renamed the
+    /// store to `OnTimeStore.store.incompatible-1792887914` and started empty,
+    /// and the Work tab showed zeros for weeks that had been worked. The
+    /// failure was transient: the likeliest cause is a background launch (the
+    /// arm task, a push) while the store's file was still locked by data
+    /// protection, which no amount of rebuilding fixes and the next launch
+    /// does not hit.
+    ///
+    /// So a launch that cannot open the store retries, then runs on an
+    /// in-memory store and leaves the file exactly where it is for the next
+    /// launch. A model change that genuinely cannot open the old store now
+    /// shows up as an empty app on every launch, and has to be met with a
+    /// real migration plan, not a wipe.
     private static func openStore(config: ModelConfiguration) throws -> ModelContainer {
         let schema = Schema(Schema0.models)
-        do {
-            return try ModelContainer(for: schema, configurations: config)
-        } catch {
-            // One immediate retry first: `ModelContainer` can throw for
-            // transient reasons (a file lock, disk pressure) that have
-            // nothing to do with the schema, and rebuilding on those would
-            // trade recoverable data for nothing.
-            if let second = try? ModelContainer(for: schema, configurations: config) {
-                return second
+        var lastError: Error?
+        for attempt in 0..<3 {
+            if attempt > 0 { Thread.sleep(forTimeInterval: 0.3) }
+            do {
+                return try ModelContainer(for: schema, configurations: config)
+            } catch {
+                lastError = error
             }
-            print("Store failed to open twice (\(error)) — moving it aside and rebuilding.")
-            if let url = config.url as URL? {
-                // Moved aside with a timestamp, never deleted: if the
-                // failure turns out to have been transient after all, the
-                // bytes are still on disk to recover by hand. Core Data
-                // keeps the WAL and shared-memory sidecars beside the
-                // store; they travel with it or the fresh store fails to
-                // open too.
-                let stamp = Int(Date().timeIntervalSince1970)
-                for suffix in ["", "-wal", "-shm"] {
-                    let sidecar = URL(fileURLWithPath: url.path + suffix)
-                    guard FileManager.default.fileExists(atPath: sidecar.path) else { continue }
-                    let backup = URL(fileURLWithPath: url.path + suffix + ".incompatible-\(stamp)")
-                    try? FileManager.default.moveItem(at: sidecar, to: backup)
-                }
-            }
-            return try ModelContainer(for: schema, configurations: config)
         }
+        print("Store failed to open three times (\(String(describing: lastError))), running in memory for this launch.")
+        storeIsTemporary = true
+        let memory = ModelConfiguration("OnTimeStoreTemporary", isStoredInMemoryOnly: true)
+        return try ModelContainer(for: schema, configurations: memory)
     }
 
     /// Must be registered before the app finishes launching, hence `init`.

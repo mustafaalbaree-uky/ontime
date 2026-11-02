@@ -11,6 +11,7 @@ import SwiftData
 struct WorkWeekView: View {
     @Query(sort: \WorkSession.startedAt) private var sessions: [WorkSession]
 
+    @AppStorage(SheetSync.lastSentKey) private var sheetLastSent: Double = 0
     @State private var weekStart: Date = WorkHours.weekStart(containing: Date())
     @State private var now = Date()
     /// Half a minute is plenty: these rows are shown to the minute, and the
@@ -58,6 +59,10 @@ struct WorkWeekView: View {
                                 .font(InkType.value)
                                 .monospacedDigit()
                                 .foregroundStyle(OnTimeSpectrum.primaryText)
+                        }
+                        if SheetSync.endpoint != nil {
+                            InkValueRow(title: "Sheet", value: sheetStatus,
+                                        valueColor: OnTimeSpectrum.secondaryText)
                         }
                     }
                 }
@@ -124,6 +129,12 @@ struct WorkWeekView: View {
 
     private var roundedWeekSeconds: TimeInterval {
         WorkHours.roundedToQuarterHour(weekSeconds)
+    }
+
+    private var sheetStatus: String {
+        guard sheetLastSent > 0 else { return "Not sent" }
+        let sent = Date(timeIntervalSince1970: sheetLastSent)
+        return "Sent \(TimeFormatting.monthDayString(sent)), \(TimeFormatting.clockString(sent))"
     }
 
     private var isCurrentWeek: Bool {

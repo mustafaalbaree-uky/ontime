@@ -24,3 +24,5 @@ ModuleCache/
 *.log
 # Apple's Radar tone, copied from this Mac at build time by tools/alarm-sound.sh
 OnTime/Resources/Sounds/
+# The Work Hours sheet's script URL and key, written at build time by tools/sheet-endpoint.sh
+OnTime/Resources/Sheet/

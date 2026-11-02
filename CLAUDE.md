@@ -496,14 +496,40 @@ routine whose "Alarm at start" switch is on, at `mustStartAt`.
 - The older route, the timer icon on the builder's "Start step 1 by", runs the
   "OnTime Timer" shortcut (`TimerShortcut`) and shows nothing in the app.
 
-**There is no schema migration.** `OnTimeApp.openStore` rebuilds the store
-when it cannot be opened against `Schema0.models`. That is deliberate for a
-personal app whose data re-accumulates, but it means any model change wipes
-the device's *visible* contents on next launch. The mechanics are gentler
-than they used to be: one immediate retry first (a transient failure such
-as a file lock must not cost the store), and on a second failure the old
-store files are moved aside with a timestamp suffix rather than deleted,
-so the bytes stay recoverable by hand.
+**There is no schema migration, and the store is never rebuilt.**
+`OnTimeApp.openStore` used to move the store aside and start empty after two
+failed opens. On 24 Oct 2026 a launch did exactly that with no new build
+installed (so no schema change; most likely a background launch while data
+protection still locked the file), and the Work tab went to zeros for weeks
+of worked hours. The sessions were recovered from
+`OnTimeStore.store.incompatible-1792887914` in the App Group container's
+`Library/Application Support`. Note the store lives in the **App Group**
+container, not the app's own: `ModelConfiguration`'s `groupContainer`
+defaults to `.automatic`, which picks the group from the entitlements. Pull
+it with `devicectl device copy from --domain-type appGroupDataContainer
+--domain-identifier group.com.mammer55.ontime`.
+
+Now a store that will not open is retried three times, then that launch runs
+on an in-memory store (`OnTimeApp.storeIsTemporary`, which the Work screen
+states) and the file is left alone for the next launch. A model change that
+the old store cannot open therefore needs a real `VersionedSchema` and
+`MigrationPlan`; it will no longer wipe anything, it will just come up empty
+on every launch until migrated.
+
+**Work sessions go to the Work Hours Google Sheet** (`SheetSync`), which is
+the record of hours worked; the phone is not. The sheet is
+`1MUsdJ-od3_4qjbY3eNTBclMcnCCWbaBivRqro418jnQ` in his
+mustafaalbaree@gmail.com Drive: a Sessions tab the app writes, and Days and
+Summary tabs that compare it against his fixed timesheet hours. The app posts
+to an Apps Script web app whose URL and key are in `~/.ontime/sheet_url` and
+`~/.ontime/sheet_key`, copied into the bundle at build time by
+`tools/sheet-endpoint.sh` (gitignored output, never committed). Each sync
+sends every finished session from the last 60 days, keyed on the session's
+`uuid` as lowercase hex without dashes, on Stop, on an edit, on a delete, at
+launch and on every foreground. The script upserts by that ID and **only
+removes a row for an explicit delete**: a session missing from a sync never
+deletes anything, so an emptied store cannot empty the sheet. The week view's
+Sheet row is the last successful sync.
 
 **`Schema0.models` is the single source of truth for persisted types.**
 `OnTimeApp` builds its container from `Schema(Schema0.models)`; a model added

@@ -14,6 +14,9 @@ cd "$DIR"
 echo "==> Alarm sound"
 ./tools/alarm-sound.sh
 
+echo "==> Sheet endpoint"
+./tools/sheet-endpoint.sh
+
 echo "==> Generating project"
 xcodegen generate >/dev/null
 

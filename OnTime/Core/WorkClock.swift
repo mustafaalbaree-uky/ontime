@@ -62,14 +62,18 @@ enum WorkClock {
         guard let running = openSession(in: context) else { return nil }
         running.endedAt = max(running.startedAt, date)
         save(context)
+        SheetSync.sync(in: context)
         return running
     }
 
     /// A `WorkSession` has no referrers, so this is a plain delete. See the
     /// type's own comment for why it does not go through `DeleteCleanup`.
+    /// The sheet is told explicitly: it never drops a row on its own.
     static func delete(_ session: WorkSession, in context: ModelContext) {
+        SheetSync.noteDeleted(session)
         context.delete(session)
         save(context)
+        SheetSync.sync(in: context)
     }
 
     private static func save(_ context: ModelContext) {

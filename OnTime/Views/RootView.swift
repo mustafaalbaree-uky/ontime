@@ -90,6 +90,7 @@ struct RootView: View {
             // before the run that would have adopted it existed.
             armScheduledRoutines()
             resumeOpenRuns()
+            SheetSync.sync(in: modelContext)
         }
         .onChange(of: scenePhase) { _, phase in
             // The opportunistic half of the arming model: any time the app
@@ -105,6 +106,9 @@ struct RootView: View {
                 return
             }
             armScheduledRoutines()
+            // Covers any Stop whose send failed, every time the app comes
+            // forward. A sync is idempotent, so this costs one request.
+            SheetSync.sync(in: modelContext)
         }
     }
 
